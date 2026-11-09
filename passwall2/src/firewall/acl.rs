@@ -199,6 +199,46 @@ impl AclState {
     }
 }
 
+/// A port list option as the firewall backends use it: comma separated ports / ranges
+/// (`80`, `1000:2000`, `1000-2000`). Anything else is dropped, notably the 26.4-era keyword
+/// `disable` ("no ports", the old default of `tcp/udp_no_redir_ports`), which 26.11 configs
+/// express as an empty value; passed through, nft fails the whole atomic batch with
+/// "Could not resolve service" and iptables gets `--dport disable`. None = no ports.
+pub fn clean_ports(v: Option<String>) -> Option<String> {
+    let v = v?;
+    let ok = |it: &str| {
+        let mut parts = it.splitn(2, [':', '-']);
+        let digits = |p: Option<&str>| p.is_some_and(|p| !p.is_empty() && p.bytes().all(|c| c.is_ascii_digit()));
+        let a = parts.next();
+        match parts.next() {
+            None => digits(a),
+            b => digits(a) && digits(b),
+        }
+    };
+    let items: Vec<String> = v.split(',').map(|it| it.chars().filter(|c| !c.is_whitespace()).collect::<String>()).filter(|it| ok(it)).collect();
+    if items.is_empty() {
+        None
+    } else {
+        Some(items.join(","))
+    }
+}
+
+/// Mode of a 26.4-era ACL rule (one without `mode`), from its *resolved* no-redir port lists
+/// (unset/`default` already replaced by the global value) and its node: both lists contain
+/// "all ports" → `0` (no proxy), node unset/empty/`default` → `2` (global node), else `1`.
+/// Shared by the read-time fallback ([`init_acl`]) and `passwall2 migrate`, so an unmigrated
+/// rule runs exactly like the migrated one.
+pub fn legacy_acl_mode(tcp_no_redir: Option<&str>, udp_no_redir: Option<&str>, node: Option<&str>) -> &'static str {
+    let all = |v: Option<&str>| v.is_some_and(|x| format!(",{},", x.replace(':', "-")).contains(",1-65535,"));
+    if all(tcp_no_redir) && all(udp_no_redir) {
+        "0"
+    } else if node.is_none_or(|n| n.is_empty() || n == "default") {
+        "2"
+    } else {
+        "1"
+    }
+}
+
 /// `init_acl()`: build the ACL state from the passwall2 config. `new_port` allocates a free
 /// port (upstream `api.get_new_port()`; injectable for tests).
 pub fn init_acl(cfg: &Config, new_port: &mut dyn FnMut() -> u16) -> AclState {
@@ -208,10 +248,10 @@ pub fn init_acl(cfg: &Config, new_port: &mut dyn FnMut() -> u16) -> AclState {
     let mut d = AclEntry {
         flag: "acl_default".into(),
         remarks: Some(api::translatef("Default", &[])),
-        tcp_no_redir_ports: gf("tcp_no_redir_ports"),
-        udp_no_redir_ports: gf("udp_no_redir_ports"),
-        tcp_redir_ports: gf("tcp_redir_ports"),
-        udp_redir_ports: gf("udp_redir_ports"),
+        tcp_no_redir_ports: clean_ports(gf("tcp_no_redir_ports")),
+        udp_no_redir_ports: clean_ports(gf("udp_no_redir_ports")),
+        tcp_redir_ports: clean_ports(gf("tcp_redir_ports")),
+        udp_redir_ports: clean_ports(gf("udp_redir_ports")),
         node: g("node"),
         local_proxy: g("localhost_proxy"),
         client_proxy: g("client_proxy"),
@@ -253,21 +293,38 @@ pub fn init_acl(cfg: &Config, new_port: &mut dyn FnMut() -> u16) -> AclState {
                 continue;
             }
             acl_num += 1;
+            // A rule without `mode` comes from a 26.4-era config: there an unset (or `default`)
+            // port option meant "same as the global value" and an unset / `default` node meant
+            // "use the global node" (mode 2 now).
+            let legacy = !o.has("mode");
+            let port = |k: &str, global: &Option<String>| -> Option<String> {
+                let v = o.get(k);
+                if legacy && v.as_deref().is_none_or(|x| x.is_empty() || x == "default") {
+                    global.clone()
+                } else {
+                    clean_ports(v)
+                }
+            };
+            let tcp_no = port("tcp_no_redir_ports", &d.tcp_no_redir_ports);
+            let udp_no = port("udp_no_redir_ports", &d.udp_no_redir_ports);
+            // upstream master never writes a rule without `mode` (its ListValue always saves),
+            // so a mode-less rule is treated as 26.4-era
+            let mode = o.get("mode").or_else(|| legacy.then(|| legacy_acl_mode(tcp_no.as_deref(), udp_no.as_deref(), o.get("node").as_deref()).to_string()));
             let mut a = AclEntry {
                 flag: o.name.clone(),
                 remarks: o.get("remarks"),
                 interface: o.get("interface"),
                 sources: if o.has("sources") { Some(o.list_raw("sources")) } else { None },
-                tcp_no_redir_ports: o.get("tcp_no_redir_ports"),
-                udp_no_redir_ports: o.get("udp_no_redir_ports"),
-                tcp_redir_ports: o.get("tcp_redir_ports"),
-                udp_redir_ports: o.get("udp_redir_ports"),
+                tcp_no_redir_ports: tcp_no,
+                udp_no_redir_ports: udp_no,
+                tcp_redir_ports: port("tcp_redir_ports", &d.tcp_redir_ports),
+                udp_redir_ports: port("udp_redir_ports", &d.udp_redir_ports),
                 client_proxy: Some("1".into()),
                 local_proxy: Some("0".into()),
                 node: o.get("node"),
                 use_: None,
             };
-            match o.get("mode").as_deref() {
+            match mode.as_deref() {
                 Some("0") => {
                     a.tcp_no_redir_ports = Some("1:65535".into());
                     a.udp_no_redir_ports = Some("1:65535".into());
@@ -542,6 +599,61 @@ config acl_rule 'r4'\n\toption enabled '1'\n\toption mode '2'\n";
             p
         };
         init_acl(&c, &mut alloc)
+    }
+
+    #[test]
+    fn t_clean_ports() {
+        assert_eq!(clean_ports(Some("disable".into())), None);
+        assert_eq!(clean_ports(Some("".into())), None);
+        assert_eq!(clean_ports(None), None);
+        assert_eq!(clean_ports(Some("22, 25,1000:2000,3-4,x,5:,:6".into())).as_deref(), Some("22,25,1000:2000,3-4"));
+        assert_eq!(clean_ports(Some("1:65535".into())).as_deref(), Some("1:65535"));
+    }
+
+    /// 26.4-era config: global ports `disable`, rules without `mode` (unset ports = global
+    /// value, node `default` = global node).
+    #[test]
+    fn t_init_legacy() {
+        let cfg = "config global\n\toption enabled '1'\n\toption node 'n1'\n\toption localhost_proxy '1'\n\toption client_proxy '1'\n\toption acl_enable '1'\n\
+config global_forwarding\n\toption tcp_no_redir_ports 'disable'\n\toption udp_no_redir_ports 'disable'\n\toption tcp_redir_ports '22,80,443'\n\toption udp_redir_ports '1:65535'\n\
+config nodes 'n1'\n\toption type 'Xray'\n\toption protocol 'vless'\n\
+config nodes 'n2'\n\toption type 'Xray'\n\toption protocol 'vless'\n\
+config acl_rule 'a'\n\toption enabled '1'\n\toption node 'default'\n\
+config acl_rule 'b'\n\toption enabled '1'\n\toption node 'n2'\n\toption tcp_no_redir_ports 'disable'\n\toption tcp_redir_ports 'default'\n";
+        let st = state(cfg);
+        let d = st.acl.last().unwrap();
+        assert_eq!(d.tcp_no_redir_ports, None);
+        assert_eq!(d.udp_no_redir_ports, None);
+        assert_eq!(d.tcp_redir_ports.as_deref(), Some("22,80,443"));
+        let a = &st.acl[0];
+        assert_eq!(a.use_.as_deref(), Some("acl_default"));
+        assert_eq!(a.tcp_redir_ports.as_deref(), Some("22,80,443"));
+        assert_eq!(a.tcp_no_redir_ports, None);
+        let b = &st.acl[1];
+        assert_eq!(b.use_.as_deref(), Some("b"));
+        assert_eq!(b.tcp_no_redir_ports, None);
+        assert_eq!(b.tcp_redir_ports.as_deref(), Some("22,80,443"));
+        assert_eq!(b.udp_redir_ports.as_deref(), Some("1:65535"));
+    }
+
+    /// A legacy rule whose (inherited) no-redir lists are "all" is mode 0 like the migrated
+    /// one: no node, and the disabled global node is not force-enabled (mode 2 would).
+    #[test]
+    fn t_init_legacy_mode0() {
+        let cfg = "config global\n\toption enabled '0'\n\toption node 'n1'\n\toption localhost_proxy '1'\n\toption client_proxy '1'\n\toption acl_enable '1'\n\
+config global_forwarding\n\toption tcp_no_redir_ports '1:65535'\n\toption udp_no_redir_ports '1:65535'\n\
+config nodes 'n1'\n\toption type 'Xray'\n\toption protocol 'vless'\n\
+config acl_rule 'a'\n\toption enabled '1'\n\toption node 'default'\n";
+        let st = state(cfg);
+        let a = &st.acl[0];
+        assert_eq!(a.use_, None);
+        assert_eq!(a.node, None);
+        let d = st.acl.last().unwrap();
+        assert_eq!(d.local_proxy.as_deref(), Some("1"));
+        assert_eq!(d.client_proxy.as_deref(), Some("1"));
+        assert_eq!(legacy_acl_mode(Some("1:65535"), Some("80,1-65535"), Some("x")), "0");
+        assert_eq!(legacy_acl_mode(Some("1:65535"), None, Some("default")), "2");
+        assert_eq!(legacy_acl_mode(None, None, Some("n2")), "1");
     }
 
     #[test]

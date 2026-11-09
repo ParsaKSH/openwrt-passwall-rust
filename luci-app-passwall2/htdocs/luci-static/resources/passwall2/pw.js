@@ -45,6 +45,37 @@ function isTimeHHMM(str) {
 	return h >= 0 && h <= 23 && mi >= 0 && mi <= 59;
 }
 
+/* 26.4-era schedule values are whole hours ('3'); the current schema stores 'H:MM'. */
+function legacyHour(v) {
+	return (typeof v == 'string' && /^\d{1,2}$/.test(v)) ? v + ':00' : v;
+}
+
+/* 26.4-era port lists used 'disable' (and 'default' in ACL rules) for "no ports"/"inherit". */
+function legacyPorts(v) {
+	return (v === 'disable' || v === 'default') ? '' : v;
+}
+
+/*
+ * Mode of an ACL rule. A rule without 'mode' is 26.4-era and is resolved the way the backend
+ * (firewall/acl.rs legacy_acl_mode) and `passwall2 migrate` resolve it: both no-redir lists
+ * "all ports" (unset/'default' = the global value) -> 0, node unset/'default' -> 2, else 1.
+ */
+function aclMode(config, section_id) {
+	const m = uci.get(config, section_id, 'mode');
+	if (m != null)
+		return m;
+	const all = (k) => {
+		let v = uci.get(config, section_id, k);
+		if (v == null || v === '' || v === 'default')
+			v = uci.get_first(config, 'global_forwarding', k);
+		return (',' + String(v || '').replace(/\s+/g, '').replace(/:/g, '-') + ',').indexOf(',1-65535,') >= 0;
+	};
+	if (all('tcp_no_redir_ports') && all('udp_no_redir_ports'))
+		return '0';
+	const node = uci.get(config, section_id, 'node');
+	return (node == null || node === '' || node === 'default') ? '2' : '1';
+}
+
 function isBase64(str) {
 	return /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{4})$/.test(String(str));
 }
@@ -1725,6 +1756,9 @@ return baseclass.extend({
 	isJSON: isJSONText,
 	isUUID: isUUID,
 	isTimeHHMM: isTimeHHMM,
+	legacyHour: legacyHour,
+	legacyPorts: legacyPorts,
+	aclMode: aclMode,
 	escapeHTML: escapeHTML,
 	trim: trim,
 	randomChars: randomChars,

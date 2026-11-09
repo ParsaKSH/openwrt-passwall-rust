@@ -43,6 +43,10 @@ passwall2/            Rust crate (binary `passwall2`)
   src/util.rs         utils.sh + generic helpers: paths, log, exec, cache var store, ports, ip, b64  (lead)
   src/api.rs          api.lua port (node helpers, versions, URL/curl, core detect, ...)
   src/xray.rs         util_xray.lua
+  src/xray/compat.rs  Xray version gates: XrayCaps (detected once per run) + downgrade() of the finished
+                      JSON to the legacy form (upstream 26.4.20) for cores older than 26.7.11
+  src/migrate.rs      `passwall2 migrate`: 26.4-era UCI schema → current (non-destructive copies; runs from
+                      uci-defaults, at service/server start, after subscriptions and restored backups)
   src/singbox.rs      util_sing-box.lua
   src/firewall/       nft.rs (nftables.sh), ipt.rs (iptables.sh), shared acl helpers (app_acl.lua) in mod.rs or acl.rs
   src/app.rs          app.sh start/stop/run_*, init boot logic, monitor.sh, tasks.sh, lease2hosts.sh, test.sh, cron

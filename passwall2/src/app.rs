@@ -207,7 +207,13 @@ fn new_session_cmd(prog: &str) -> Command {
 
 /// Start `prog args >output 2>&1 &` (truncating output, own session). Returns the pid.
 pub fn spawn_out(prog: &str, args: &[String], output: &str) -> Option<u32> {
-    let out = std::fs::OpenOptions::new().create(true).write(true).truncate(output != "/dev/null").open(output).ok()?;
+    // Truncate like upstream's `>file`, but hand the core an O_APPEND descriptor so the
+    // monitor's log size cap (daemons::cap_logs) can truncate it again without leaving a
+    // sparse file that keeps growing from the old offset.
+    if output != "/dev/null" {
+        std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(output).ok()?;
+    }
+    let out = std::fs::OpenOptions::new().create(true).append(true).open(output).ok()?;
     let err = out.try_clone().ok()?;
     new_session_cmd(prog).args(args).stdin(Stdio::null()).stdout(out).stderr(err).spawn().ok().map(|c| c.id())
 }
@@ -216,13 +222,25 @@ pub fn spawn_out(prog: &str, args: &[String], output: &str) -> Option<u32> {
 pub fn spawn_shell(cmd: &str) -> Option<u32> {
     new_session_cmd("/bin/sh")
         .arg("-c")
-        .arg(format!("exec {} 2>&1", cmd))
+        .arg(append_redirect(cmd))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .ok()
         .map(|c| c.id())
+}
+
+/// Shell line for a recorded `<prog> <args> ><output>`: truncate the output once, then run the
+/// command with an appending redirect (see [`spawn_out`]). Commands without a trailing
+/// redirect run unchanged.
+pub fn append_redirect(cmd: &str) -> String {
+    match cmd.rsplit_once(" >") {
+        Some((pre, out)) if !out.is_empty() && !out.starts_with('>') && !out.contains(char::is_whitespace) && out != "/dev/null" => {
+            format!(": >{out}; exec {pre} >>{out} 2>&1")
+        }
+        _ => format!("exec {} 2>&1", cmd),
+    }
 }
 
 /// The part of a recorded command used to find its process: text before the first `>`,
@@ -1027,13 +1045,25 @@ pub fn run_xray(ctx: &Ctx, cfg: &Config, a: &Args) -> CoreResult {
     let config_file = a.s("config_file");
     write_json(&config_file, crate::xray::gen_config(&j).as_ref());
     let test_log = if log_file == "/dev/null" { format!("{}/test.log", TMP_PATH) } else { log_file.clone() };
-    let status = match &ctx.xray_bin {
+    let test = || match &ctx.xray_bin {
         Some(bin) => {
             let out = std::fs::File::create(&test_log).map(Stdio::from).unwrap_or_else(|_| Stdio::null());
             Command::new(bin).args(["run", "-test", "-c", &config_file]).stdin(Stdio::null()).stdout(out).stderr(Stdio::null()).status().map(|s| s.code().unwrap_or(1)).unwrap_or(127)
         }
         None => 127,
     };
+    let mut status = test();
+    if status != 0 && status != 127 && !crate::xray::XrayCaps::detect().known {
+        // The core's version could not be read, so the modern config form was assumed. Retry
+        // once with the form every Xray version accepts before giving up.
+        log(1, "Xray version unknown and the config test failed: retrying with the legacy config format.");
+        // (a pure rewrite of the written config: no generator side effects run twice)
+        if let Ok(mut c) = serde_json::from_str::<Value>(&util::read(&config_file)) {
+            crate::xray::downgrade(&mut c, &crate::xray::XrayCaps::legacy());
+            write_json(&config_file, Some(&c));
+            status = test();
+        }
+    }
     if status != 0 {
         return Err((status, test_log));
     }
@@ -1395,6 +1425,14 @@ pub fn cron_time(week: &str, time: &str) -> Option<String> {
         _ => return None,
     };
     let time = if time.is_empty() { "0:00" } else { time };
+    // 26.4-era configs store a whole hour (`3`) instead of `H:MM`
+    let hour_only;
+    let time = if (1..=2).contains(&time.len()) && time.bytes().all(|c| c.is_ascii_digit()) {
+        hour_only = format!("{}:00", time);
+        hour_only.as_str()
+    } else {
+        time
+    };
     if !crate::api::is_timehhmm(time) {
         return None;
     }
@@ -1822,6 +1860,8 @@ pub fn app_start(action: &str) -> i32 {
     for d in ["/tmp/etc", "/tmp/log", TMP_PATH, TMP_BIN_PATH, TMP_SCRIPT_FUNC_PATH, TMP_ROUTE_PATH, TMP_ACL_PATH, TMP_PATH2] {
         util::mkdir(d);
     }
+    // bring a 26.4-era config to the current schema before anything is generated from it
+    crate::migrate::run("service start");
     let cfg = Config::load(util::CONFIG);
     let mut ctx = get_config(&cfg);
     let asset = cfg.get_or("@global_rules[0]", "v2ray_location_asset", "/usr/share/v2ray/");

@@ -97,6 +97,12 @@ return view.extend({
 		o.default = 'script_logic';
 		o.value('tcp', 'TCP');
 		o.value('script_logic', _('URL Test') + '(passwall2 %s)'.format(_('Inner implement')));
+		/* 26.4-era name of script_logic */
+		o.cfgvalue = function (section_id, set_value) {
+			if (arguments.length > 1)
+				return form.ListValue.prototype.cfgvalue.call(this, section_id, set_value == 'passwall_logic' ? 'script_logic' : set_value);
+			return form.ListValue.prototype.cfgvalue.call(this, section_id);
+		};
 		o.depends('balancing_enable', '1');
 
 		o = s.option(form.Value, 'health_probe_url', _('Probe URL'));

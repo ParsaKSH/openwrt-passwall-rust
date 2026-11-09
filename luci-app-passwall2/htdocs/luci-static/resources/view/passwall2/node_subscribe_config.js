@@ -326,6 +326,12 @@ return view.extend({
 		o = s.option(form.Value, 'update_time_mode', _('Update Time'));
 		timeChoices(o);
 		o.default = '0:00';
+		/* LuCI loads with cfgvalue(sid, value): keep the two-argument call so the value is stored */
+		o.cfgvalue = function (section_id, set_value) {
+			if (arguments.length > 1)
+				return form.Value.prototype.cfgvalue.call(this, section_id, pw.legacyHour(set_value));
+			return form.Value.prototype.cfgvalue.call(this, section_id);
+		};
 		o.validate = function (section_id, value) {
 			return (value == null || value === '' || pw.isTimeHHMM(value)) ? true : _('valid time (hh:mm)');
 		};

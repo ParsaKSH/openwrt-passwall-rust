@@ -1069,6 +1069,10 @@ pub fn cli(args: &[String]) -> i32 {
         "truncate" => run.truncate(a2),
         _ => {}
     }
+    if cmd == "start" || cmd == "add" {
+        // imported nodes may use legacy option names (old share-link shapes, old configs)
+        crate::migrate::run("subscription");
+    }
     drop(lock);
     if run.restart_required {
         let action = if a3 == Some("cron") { " cron" } else { "" };

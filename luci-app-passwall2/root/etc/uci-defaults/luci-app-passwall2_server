@@ -14,6 +14,10 @@ fi
 # runs "start" (which, like upstream, does not stop first). Stop it; the postinst restarts it.
 [ -x /usr/bin/passwall2 ] && /usr/bin/passwall2 server stop >/dev/null 2>&1
 
+# Not upstream: 26.4-era server instances are 'config user' sections; convert them to the
+# current 'server' schema (idempotent, also runs at server start).
+[ -x /usr/bin/passwall2 ] && /usr/bin/passwall2 migrate install >/dev/null 2>&1
+
 rm -f /tmp/luci-indexcache /tmp/luci-indexcache.*
 rm -rf /tmp/luci-modulecache/
 killall -HUP rpcd 2>/dev/null

@@ -519,6 +519,8 @@ pub fn restore_backup(p: &Params) -> Value {
     let _ = std::fs::remove_file(&file_path);
     match result {
         Ok(()) => {
+            // a backup made by an older passwall2 may use the legacy schema
+            crate::migrate::run("restore backup");
             pw_log("Configuration restored successfully…");
             pw_log("Service restarting…");
             for init in ["/etc/init.d/passwall2", "/etc/init.d/passwall2_server"] {

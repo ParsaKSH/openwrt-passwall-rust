@@ -23,8 +23,13 @@ use std::cell::RefCell;
 use std::process::{Command, Stdio};
 use std::rc::Rc;
 
+mod compat;
+pub use compat::{downgrade, XrayCaps};
+
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod legacy_tests;
 #[cfg(test)]
 mod server_raw_tests {
     use super::*;
@@ -50,7 +55,7 @@ mod server_raw_tests {
     }
 }
 
-/// `xray_min_version`
+/// `xray_min_version` (emitted as `version.min`; [`downgrade`] removes it for older cores)
 pub const XRAY_MIN_VERSION: &str = "26.7.11";
 const DOMAINS_EXCLUDED: &str = "/usr/share/passwall2/domains_excluded";
 
@@ -621,7 +626,8 @@ impl<'a> Gen<'a> {
                 json!({
                     "serverName": g("tls_serverName"),
                     "fingerprint": if is_xray && neq(node, "utls", "1") { nne(node, "fingerprint") } else { None },
-                    "pinnedPeerCertSha256": nne(node, "tls_pinSHA256").map(|x| api::sha256_sb_xray(&x)).unwrap_or_default(),
+                    // legacy (26.4) name: tls_CertSha
+                    "pinnedPeerCertSha256": nne(node, "tls_pinSHA256").or_else(|| nne(node, "tls_CertSha")).map(|x| api::sha256_sb_xray(&x)).unwrap_or_default(),
                     "verifyPeerCertByName": g("tls_CertByName").unwrap_or_default(),
                     "echConfigList": if neq(node, "ech", "1") { g("ech_config") } else { None },
                     "certificates": match g("tls_certificate_pem") {
@@ -825,7 +831,8 @@ impl<'a> Gen<'a> {
             Value::Null
         };
 
-        let ss_method = g("ss_method");
+        // legacy (26.4 and older) configs store the cipher in `method`
+        let ss_method = nne(node, "ss_method").or_else(|| g("method"));
         let method = if p == "shadowsocks" {
             match ss_method.as_deref() {
                 Some("chacha20-ietf-poly1305") => Some("chacha20-poly1305".to_string()),
@@ -1442,9 +1449,17 @@ pub fn gen_config(var: &Args) -> Option<Value> {
     Some(gen_config_with(&cfg, var))
 }
 
-/// [`gen_config`] on an already loaded passwall2 config.
+/// [`gen_config`] on an already loaded passwall2 config, for the installed core.
 pub fn gen_config_with(cfg: &Config, var: &Args) -> Value {
-    build_config(cfg, var, true)
+    gen_config_caps(cfg, var, &XrayCaps::detect(), true)
+}
+
+/// [`gen_config`] for an explicit core (`effects` = side effects: run_socks, port allocation,
+/// files, set flush).
+pub fn gen_config_caps(cfg: &Config, var: &Args, caps: &XrayCaps, effects: bool) -> Value {
+    let mut c = build_config(cfg, var, effects);
+    downgrade(&mut c, caps);
+    c
 }
 
 fn build_config(cfg: &Config, var: &Args, effects: bool) -> Value {
@@ -1510,8 +1525,9 @@ fn build_config(cfg: &Config, var: &Args, effects: bool) -> Value {
                 .filter(|w| !w.is_empty())
                 .collect()
         };
-        let lengths = toks("fragment_lengths");
-        let delays = toks("fragment_delays");
+        // legacy (26.4) single-range options: fragment_length / fragment_delay
+        let lengths = Some(toks("fragment_lengths")).filter(|l| !l.is_empty()).unwrap_or_else(|| toks("fragment_length"));
+        let delays = Some(toks("fragment_delays")).filter(|l| !l.is_empty()).unwrap_or_else(|| toks("fragment_delay"));
         g.fragment_table = Some(json!({
             "type": "fragment",
             "settings": {
@@ -2115,6 +2131,17 @@ fn flush_direct_sets(direct_ipset: Option<&str>, direct_nftset: Option<&str>, no
 
 /// `gen_proto_config(var)`: socks/http inbounds → one upstream (`servers` schema) + direct.
 pub fn gen_proto_config(var: &Args) -> Option<Value> {
+    gen_proto_config_caps(var, &XrayCaps::detect())
+}
+
+/// [`gen_proto_config`] for an explicit core.
+pub fn gen_proto_config_caps(var: &Args, caps: &XrayCaps) -> Option<Value> {
+    let mut c = proto_config(var)?;
+    downgrade(&mut c, caps);
+    Some(c)
+}
+
+fn proto_config(var: &Args) -> Option<Value> {
     let v = |k: &str| var.get(k).cloned();
     let local_socks_address = v("local_socks_address").unwrap_or_else(|| "0.0.0.0".into());
     let local_http_address = v("local_http_address").unwrap_or_else(|| "0.0.0.0".into());
@@ -2195,7 +2222,14 @@ pub fn gen_config_server(server_id: &str) -> Option<Value> {
     let cfg_s = Config::load(util::CONFIG_SERVER);
     let node = node_of(cfg_s.section(server_id)?);
     let cfg_c = Config::load(util::CONFIG);
-    Some(server_config(&cfg_c, &cfg_s, node, true))
+    Some(server_config_caps(&cfg_c, &cfg_s, node, &XrayCaps::detect(), true))
+}
+
+/// Server config for an explicit core.
+fn server_config_caps(cfg_c: &Config, cfg_s: &Config, node: Node, caps: &XrayCaps, effects: bool) -> Value {
+    let mut c = server_config(cfg_c, cfg_s, node, effects);
+    downgrade(&mut c, caps);
+    c
 }
 
 /// `gen_config_server(node)` with the server section given as a Lua-like table
@@ -2203,15 +2237,28 @@ pub fn gen_config_server(server_id: &str) -> Option<Value> {
 pub fn gen_config_server_node(node: &Node) -> Value {
     let cfg_s = Config::load(util::CONFIG_SERVER);
     let cfg_c = Config::load(util::CONFIG);
-    server_config(&cfg_c, &cfg_s, node.clone(), true)
+    server_config_caps(&cfg_c, &cfg_s, node.clone(), &XrayCaps::detect(), true)
 }
 
 /// [`gen_config_server_node`] on already loaded configs (client `passwall2`, server `passwall2_server`).
 pub fn gen_config_server_with(cfg_c: &Config, cfg_s: &Config, node: &Node) -> Value {
-    server_config(cfg_c, cfg_s, node.clone(), true)
+    server_config_caps(cfg_c, cfg_s, node.clone(), &XrayCaps::detect(), true)
 }
 
 fn server_config(cfg_c: &Config, cfg_s: &Config, mut node: Node, effects: bool) -> Value {
+    // legacy (26.4) server sections: `dokodemo-door`, SS cipher/password in method/password
+    if neq(&node, "protocol", "dokodemo-door") {
+        set(&mut node, "protocol", "tunnel");
+    }
+    if neq(&node, "protocol", "shadowsocks") {
+        for (new, old) in [("ss_method", "method"), ("ss_password", "password")] {
+            if nne(&node, new).is_none() {
+                if let Some(v) = nne(&node, old) {
+                    set(&mut node, new, v);
+                }
+            }
+        }
+    }
     let mut outbounds: Vec<Value> = vec![
         json!({ "protocol": "freedom", "tag": "direct", "settings": { "finalRules": [{ "action": "allow" }] } }),
         json!({ "protocol": "blackhole", "tag": "blocked" }),

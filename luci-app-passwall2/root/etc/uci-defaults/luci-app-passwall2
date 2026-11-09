@@ -32,6 +32,12 @@ uci commit firewall
 
 [ ! -s "/etc/config/passwall2" ] && cp -f /usr/share/passwall2/0_default_config /etc/config/passwall2
 
+# Not upstream: an existing config from an older luci-app-passwall2 (26.4.x and earlier) uses
+# option names / values the current schema renamed (Shadowsocks cipher in 'method', ports
+# 'disable', ...). Copy them to their new names (the legacy options are kept, so a rollback to
+# the old package still works). Idempotent; it also runs at every service start.
+[ -x /usr/bin/passwall2 ] && /usr/bin/passwall2 migrate install >/dev/null 2>&1
+
 # upstream: chmod +x /usr/share/passwall2/*.sh (no shell helpers ship any more; the logic is in the binary)
 chmod +x /usr/bin/passwall2 /usr/libexec/rpcd/luci.passwall2 2>/dev/null
 

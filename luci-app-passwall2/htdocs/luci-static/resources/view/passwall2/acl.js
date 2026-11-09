@@ -83,7 +83,7 @@ return view.extend({
 
 		o = s.option(form.DummyValue, 'mode', _('Mode'));
 		o.renderWidget = function (section_id) {
-			const v = uci.get(CFG, section_id, 'mode') || '0';
+			const v = pw.aclMode(CFG, section_id);
 			if (v === '1')
 				return pw.badge(_('Proxy'), 'ok');
 			if (v === '2')

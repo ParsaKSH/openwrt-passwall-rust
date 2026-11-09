@@ -289,6 +289,8 @@ pub fn is_enabled(scfg: &Config) -> bool {
 
 /// `start()` of server_app.lua.
 pub fn start() -> i32 {
+    // 26.4-era server sections (`config user` instances) → current schema
+    crate::migrate::run("server start");
     let scfg = Config::load(CONFIG);
     if !is_enabled(&scfg) {
         return 0;

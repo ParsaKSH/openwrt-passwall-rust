@@ -694,7 +694,9 @@ impl Gen {
                 ("utls", utls),
                 ("reality", reality),
             ]);
-            let pin = node.g("tls_pinSHA256").filter(|p| !p.is_empty());
+            // legacy (26.4) name: tls_CertSha, read when the new option is unset/empty (like
+            // xray.rs and `passwall2 migrate`, which copies it in that case)
+            let pin = node.g("tls_pinSHA256").filter(|p| !p.is_empty()).or_else(|| node.g("tls_CertSha").filter(|p| !p.is_empty()));
             if self.ver.ge_1_15_0 {
                 if let Some(p) = pin {
                     t.insert("certificate_sha256".into(), arr(&[api::sha256_xray_sb(p)]));
@@ -812,7 +814,8 @@ impl Gen {
             "shadowsocks" => {
                 let pe = node.flag_on("plugin_enabled");
                 Some(obj(vec![
-                    ("method", ov(node.g("ss_method"))),
+                    // legacy (26.4 and older) configs store the cipher in `method`
+                    ("method", ov(node.g("ss_method").filter(|m| !m.is_empty()).or(node.g("method")))),
                     ("password", sv(node.g("password").unwrap_or(""))),
                     ("plugin", if pe { ov(node.g("plugin")) } else { None }),
                     ("plugin_opts", if pe { ov(node.g("plugin_opts")) } else { None }),
@@ -821,7 +824,7 @@ impl Gen {
                 ]))
             }
             "shadowsocksr" => Some(obj(vec![
-                ("method", ov(node.g("ssr_method"))),
+                ("method", ov(node.g("ssr_method").filter(|m| !m.is_empty()).or(node.g("method")))),
                 ("password", sv(node.g("password").unwrap_or(""))),
                 ("obfs", ov(node.g("ssr_obfs"))),
                 ("obfs_param", ov(node.g("ssr_obfs_param"))),
@@ -2428,8 +2431,9 @@ impl Gen {
             "socks" => Some(obj(vec![("users", users.clone())])),
             "http" => Some(obj(vec![("users", users.clone()), ("tls", tls_if(&tls))])),
             "shadowsocks" => Some(obj(vec![
-                ("method", ov(node.g("ss_method"))),
-                ("password", ov(node.g("ss_password"))),
+                // legacy (26.4) server sections: method / password
+                ("method", ov(node.g("ss_method").filter(|m| !m.is_empty()).or(node.g("method")))),
+                ("password", ov(node.g("ss_password").filter(|m| !m.is_empty()).or(node.g("password")))),
                 ("users", users.clone()),
                 ("multiplex", mux.clone()),
             ])),
@@ -2787,6 +2791,10 @@ mod tests {
         let n = node(&[(".name", "n1"), ("type", "sing-box"), ("protocol", "trojan"), ("address", "1.2.3.4"), ("port", "1"), ("tls", "1"), ("tls_pinSHA256", &pin)]);
         let o = Value::Object(g.gen_outbound(None, Some(n), None, None).unwrap());
         assert_eq!(o["tls"]["insecure"], false);
+        assert_eq!(o["tls"]["certificate_sha256"][0], api::sha256_xray_sb(&pin));
+        // 26.4-era name
+        let n = node(&[(".name", "n1"), ("type", "sing-box"), ("protocol", "trojan"), ("address", "1.2.3.4"), ("port", "1"), ("tls", "1"), ("tls_CertSha", &pin)]);
+        let o = Value::Object(g.gen_outbound(None, Some(n), None, None).unwrap());
         assert_eq!(o["tls"]["certificate_sha256"][0], api::sha256_xray_sb(&pin));
     }
 

@@ -785,10 +785,12 @@ impl<'a> Fw<'a> {
             None => String::new(),
         };
         let tmp = self.tmp4();
-        let tcp_no = v.s("tcp_no_redir_ports");
-        let udp_no = v.s("udp_no_redir_ports");
-        let tcp_redir = v.s("tcp_redir_ports");
-        let udp_redir = v.s("udp_redir_ports");
+        // backstop for state files written before the ACL values were cleaned (see clean_ports)
+        let port = |k: &str| super::acl::clean_ports(Some(v.s(k))).unwrap_or_default();
+        let tcp_no = port("tcp_no_redir_ports");
+        let udp_no = port("udp_no_redir_ports");
+        let tcp_redir = port("tcp_redir_ports");
+        let udp_redir = port("udp_redir_ports");
         let redir_port = v.s("redir_port");
         let node_remarks = v.s("node_remarks");
         let remarks = v.s("remarks");

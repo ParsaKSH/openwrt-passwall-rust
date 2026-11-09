@@ -743,10 +743,12 @@ pub fn gen_direct_gid_rules(g: &mut Gen) {
 /// `load_acl` rule generation for one ACL (§2.4).
 pub fn gen_acl_rules(ctx: &RuleCtx, a: &AclInput, g: &mut Gen) {
     let v = &a.var;
-    let tcp_no = v.s("tcp_no_redir_ports");
-    let udp_no = v.s("udp_no_redir_ports");
-    let tcp_redir = v.s("tcp_redir_ports");
-    let udp_redir = v.s("udp_redir_ports");
+    // backstop for state files written before the ACL values were cleaned (see clean_ports)
+    let port = |k: &str| super::acl::clean_ports(Some(v.s(k))).unwrap_or_default();
+    let tcp_no = port("tcp_no_redir_ports");
+    let udp_no = port("udp_no_redir_ports");
+    let tcp_redir = port("tcp_redir_ports");
+    let udp_redir = port("udp_redir_ports");
     let node = v.s("node");
     let node_remarks = v.s("node_remarks");
     let redir_port = v.s("redir_port");
@@ -2174,6 +2176,30 @@ add rule inet passwall2 PSW2_MANGLE_V6 meta l4proto udp counter return comment \
         assert!(s.contains(&format!("add rule inet passwall2 PSW2_MANGLE ip protocol tcp iifname \"br-lan\" ip daddr @myset counter return {}\n", rem)));
         // no local-proxy rules for an ACL rule
         assert!(!s.contains("oif lo"));
+    }
+
+    /// 26.4-era `disable` ("no ports") must never reach nft: it fails the atomic load with
+    /// "Could not resolve service" (and an empty dport match would return all traffic).
+    #[test]
+    fn t_legacy_disable_ports() {
+        let ctx = RuleCtx { tproxy: true, ..Default::default() };
+        let mut a = default_acl();
+        a.var.insert("tcp_no_redir_ports".into(), "disable".into());
+        a.var.insert("udp_no_redir_ports".into(), "disable".into());
+        a.var.insert("tcp_redir_ports".into(), "22,25,53,80,443".into());
+        let mut g = Gen::default();
+        gen_acl_rules(&ctx, &a, &mut g);
+        let s = g.script();
+        assert!(!s.contains("disable"), "{}", s);
+        assert!(!s.contains("ip protocol tcp counter return\n"), "{}", s);
+        assert!(!g.logs.iter().any(|(_, m)| m.contains("not proxy")), "{:?}", g.logs);
+        assert!(s.contains("tcp dport {22,25,53,80,443}"));
+        // same result as an empty value (the current schema)
+        let mut b = default_acl();
+        b.var.insert("tcp_redir_ports".into(), "22,25,53,80,443".into());
+        let mut g2 = Gen::default();
+        gen_acl_rules(&ctx, &b, &mut g2);
+        assert_eq!(s, g2.script());
     }
 
     #[test]

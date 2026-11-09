@@ -31,9 +31,35 @@ pub fn monitor() -> i32 {
             continue;
         }
         util::write(&lock_file, "");
+        cap_logs(LOG_CAP_BYTES);
         monitor_pass();
         let _ = std::fs::remove_file(&lock_file);
         sleep_s(58);
+    }
+}
+
+/// Largest size a runtime log may reach before the monitor empties it.
+pub const LOG_CAP_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Empty every `*.log` under the runtime dir (core logs such as `acl/default/global.log`) and
+/// the main log once it is larger than `cap`. /tmp is RAM: with loglevel `info`, upstream's
+/// core log grew to 253 MB in a week on a 512 MB router and filled /tmp.
+/// upstream quirk: upstream never limits these logs. Cores write through O_APPEND descriptors
+/// (see `spawn_out`/`append_redirect`), so truncation restarts them at offset 0.
+pub fn cap_logs(cap: u64) {
+    let mut files = Vec::new();
+    super::find_files(TMP_PATH, &|n: &str| n.ends_with(".log"), &mut files);
+    files.push(util::LOG_FILE.to_string());
+    for f in files {
+        let Ok(md) = std::fs::metadata(&f) else { continue };
+        if md.len() <= cap {
+            continue;
+        }
+        if let Ok(fh) = std::fs::OpenOptions::new().write(true).open(&f) {
+            if fh.set_len(0).is_ok() {
+                util::log(0, &format!("{} exceeded {} MB, truncated.", f, cap / (1024 * 1024)));
+            }
+        }
     }
 }
 
@@ -270,6 +296,29 @@ pub fn lease2hosts() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn append_redirect_respawn() {
+        use crate::app::append_redirect;
+        assert_eq!(
+            append_redirect("/tmp/etc/passwall2/bin/xray run -c /tmp/a.json >/tmp/a.log"),
+            ": >/tmp/a.log; exec /tmp/etc/passwall2/bin/xray run -c /tmp/a.json >>/tmp/a.log 2>&1"
+        );
+        assert_eq!(append_redirect("x run >/dev/null"), "exec x run >/dev/null 2>&1");
+        assert_eq!(append_redirect("x run"), "exec x run 2>&1");
+    }
+
+    #[test]
+    fn appended_log_truncates_cleanly() {
+        use std::io::Write;
+        let p = std::env::temp_dir().join(format!("pw2cap{}.log", std::process::id()));
+        std::fs::write(&p, vec![b'a'; 100]).unwrap();
+        let mut w = std::fs::OpenOptions::new().append(true).open(&p).unwrap();
+        std::fs::OpenOptions::new().write(true).open(&p).unwrap().set_len(0).unwrap();
+        w.write_all(b"new").unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), b"new");
+        let _ = std::fs::remove_file(&p);
+    }
 
     #[test]
     fn odhcpd() {

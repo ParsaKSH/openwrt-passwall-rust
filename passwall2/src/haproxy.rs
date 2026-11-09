@@ -45,7 +45,8 @@ impl Global {
     pub fn from_config(cfg: &Config) -> Global {
         let g = |o: &str| cfg.get("@global_haproxy[0]", o);
         Global {
-            health_check_type: g("health_check_type").unwrap_or_else(|| "tcp".into()),
+            // 26.4-era name of script_logic
+            health_check_type: g("health_check_type").map(|t| if t == "passwall_logic" { "script_logic".into() } else { t }).unwrap_or_else(|| "tcp".into()),
             health_check_inter: g("health_check_inter").unwrap_or_else(|| "60".into()),
             balancing_strategy: g("balancingStrategy").unwrap_or_else(|| "roundrobin".into()),
             console_port: g("console_port"),

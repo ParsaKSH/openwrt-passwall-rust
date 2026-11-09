@@ -254,11 +254,20 @@ return view.extend({
 		o.value('0', _('No Proxy'));
 		o.value('1', _('Proxy'));
 		o.value('2', _('Proxy') + ' ' + _('Use global config') + '(' + getNodeName(globalNode ? uci.get(CFG, globalNode) : null) + ')');
+		/* a 26.4-era rule has no 'mode': show (and keep, unless changed) its resolved mode */
+		o.cfgvalue = function (section_id, set_value) {
+			if (arguments.length > 1)
+				return form.ListValue.prototype.cfgvalue.call(this, section_id, set_value == null ? pw.aclMode(CFG, section_id) : set_value);
+			return form.ListValue.prototype.cfgvalue.call(this, section_id);
+		};
 
 		const portOption = (name, title, choices, def, deps) => {
 			o = s.taboption('Proxy', form.Value, name, title);
 			choices.forEach((c) => o.value(c[0], c[1]));
 			if (def != null) o.default = def;
+			o.cfgvalue = function (section_id) {
+				return pw.legacyPorts(uci.get(CFG, section_id, name));
+			};
 			o.write = function (section_id, value) {
 				uci.set(CFG, section_id, name, portNormalize(value));
 			};

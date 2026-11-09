@@ -128,6 +128,12 @@ return view.extend({
 			o = s.option(form.Value, value + '_time_mode', modeTitles[value][1]);
 			timeChoices(o);
 			o.default = '0:00';
+			/* LuCI loads with cfgvalue(sid, value): keep the two-argument call so the value is stored */
+			o.cfgvalue = function (section_id, set_value) {
+				if (arguments.length > 1)
+					return form.Value.prototype.cfgvalue.call(this, section_id, pw.legacyHour(set_value));
+				return form.Value.prototype.cfgvalue.call(this, section_id);
+			};
 			o.validate = function (section_id, v) {
 				return (v == null || v === '' || pw.isTimeHHMM(v)) ? true : _('valid time (hh:mm)');
 			};
@@ -148,6 +154,9 @@ return view.extend({
 			o = s.option(form.Value, name, title, descr);
 			choices.forEach((c) => o.value(c[0], c[1]));
 			if (def != null) o.default = def;
+			o.cfgvalue = function (section_id) {
+				return pw.legacyPorts(uci.get(CFG, section_id, name));
+			};
 			o.write = function (section_id, value) {
 				uci.set(CFG, section_id, name, portNormalize(value));
 			};

@@ -16,6 +16,7 @@ pub mod server;
 pub mod subscribe;
 pub mod rules;
 pub mod rpc;
+pub mod migrate;
 
 const HELP: &str = "passwall2 (Rust) — commands:
   start | stop | restart | boot          service control (used by /etc/init.d/passwall2)
@@ -31,6 +32,7 @@ const HELP: &str = "passwall2 (Rust) — commands:
   dns-helper <...>                       dnsmasq helper (helper_dnsmasq)
   monitor | tasks | lease2hosts          daemons
   rpc <list|call> [method]               rpcd exec plugin (luci.passwall2)
+  migrate [--dry-run]                    bring a legacy (26.4-era) config to the current schema
   version";
 
 fn main() {
@@ -50,6 +52,7 @@ fn main() {
         "dns-helper" => dns::cli(&rest),
         "rpc" => rpc::cli(&rest),
         "api" => api::cli(&rest),
+        "migrate" => migrate::cli(&rest),
         "version" | "-v" | "--version" => {
             println!("{}", env!("CARGO_PKG_VERSION"));
             0

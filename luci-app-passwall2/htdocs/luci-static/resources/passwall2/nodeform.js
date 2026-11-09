@@ -811,7 +811,7 @@ function xraySpecs(S, ctx) {
 		o.set({ default: 'none', placeholder: 'none', enc: 'nonedefault' });
 		o.depends({ protocol: 'vless' });
 
-		o = S.add('ListValue', 'ss_method', _('Encrypt Method'));
+		o = S.add('ListValue', 'ss_method', _('Encrypt Method')).set({ legacy: 'method' });
 		XRAY_SS_METHODS.forEach(function(t) { o.value(t); });
 		o.depends({ protocol: 'shadowsocks' });
 
@@ -835,7 +835,7 @@ function xraySpecs(S, ctx) {
 		o.depends({ tls: true }); o.depends({ protocol: 'hysteria2' }); o.depends({ protocol: 'masque' });
 
 		var pinDeps = [{ tls: true, reality: false }, { protocol: 'hysteria2' }, { protocol: 'masque' }];
-		o = S.add('Value', 'tls_pinSHA256', _('TLS Chain Fingerprint (SHA256)'), pinDesc());
+		o = S.add('Value', 'tls_pinSHA256', _('TLS Chain Fingerprint (SHA256)'), pinDesc()).set({ legacy: 'tls_CertSha' });
 		pinDeps.forEach(function(d) { o.depends(d); });
 		o = S.add('Value', 'tls_CertByName', _('TLS Certificate Name (CertName)'), _('TLS is used to verify the leaf certificate name.'));
 		pinDeps.forEach(function(d) { o.depends(d); });
@@ -1067,12 +1067,12 @@ function singboxSpecs(S, ctx) {
 		SB_VMESS_SECURITY.forEach(function(t) { o.value(t); });
 		o.depends({ protocol: 'vmess' });
 
-		o = S.add('ListValue', 'ss_method', _('Encrypt Method'));
+		o = S.add('ListValue', 'ss_method', _('Encrypt Method')).set({ legacy: 'method' });
 		SB_SS_NEW.concat(SB_SS_OLD).forEach(function(t) { o.value(t); });
 		o.depends({ protocol: 'shadowsocks' });
 
 		if (tag('with_shadowsocksr')) {
-			o = S.add('ListValue', 'ssr_method', _('Encrypt Method'));
+			o = S.add('ListValue', 'ssr_method', _('Encrypt Method')).set({ legacy: 'method' });
 			SB_SS_OLD.forEach(function(t) { o.value(t); });
 			o.depends({ protocol: 'shadowsocksr' });
 			o = S.add('ListValue', 'ssr_protocol', _('Protocol'));
@@ -1152,7 +1152,7 @@ function singboxSpecs(S, ctx) {
 		o.depends({ tls: true }); ['hysteria', 'tuic', 'hysteria2', 'naive', 'masque'].forEach(function(p) { o.depends({ protocol: p }); });
 		o = S.add('Flag', 'tls_allowInsecure', _('allowInsecure'), _('Whether unsafe connections are allowed. When checked, Certificate validation will be skipped.')).set({ default: '0' });
 		o.depends({ tls: true }); quicTls.forEach(function(p) { o.depends({ protocol: p }); });
-		o = S.add('Value', 'tls_pinSHA256', _('TLS Chain Fingerprint (SHA256)'), pinDesc());
+		o = S.add('Value', 'tls_pinSHA256', _('TLS Chain Fingerprint (SHA256)'), pinDesc()).set({ legacy: 'tls_CertSha' });
 		o.depends({ tls: true }); quicTls.forEach(function(p) { o.depends({ protocol: p }); });
 		o = S.add('Flag', 'tls_certificate', _('TLS Certificate (PEM)')).set({ default: '0' });
 		o.depends({ tls: true, reality: false }); ['hysteria', 'tuic', 'hysteria2', 'naive', 'masque'].forEach(function(p) { o.depends({ protocol: p }); });
@@ -1426,6 +1426,7 @@ function virtualForm(S, data) {
 	var active = {}, cur = {};
 	var stored = function(sp) {
 		var v = data[sp.name];
+		if ((v == null || v === '') && sp.legacy) v = data[sp.legacy];
 		if (sp.enc && ENC[sp.enc] && v != null && !Array.isArray(v)) v = ENC[sp.enc].decode(v);
 		if (sp.name == 'node_group' && v != null) v = toArray(v);
 		if (v == null || (Array.isArray(v) && !v.length && sp.cls != 'DynamicList')) {
@@ -1836,11 +1837,13 @@ function buildForm(s, S, ctx, hooks) {
 		o.checkDepends = pwCheckDepends;
 
 		var enc = sp.enc && ENC[sp.enc];
-		if (enc || sp.cls == 'CheckList') {
+		if (enc || sp.cls == 'CheckList' || sp.legacy) {
 			o.load = function(section_id) {
 				var v = uci.get(CONF, section_id, sp.name);
+				/* 26.4-era configs store this value under its old option name (see `passwall2 migrate`) */
+				if ((v == null || v === '') && sp.legacy) v = uci.get(CONF, section_id, sp.legacy);
 				if (sp.cls == 'CheckList') return v == null ? null : toArray(v);
-				return (v == null) ? null : enc.decode(v);
+				return (v == null || !enc) ? v : enc.decode(v);
 			};
 		}
 		if (sp.validate) {
@@ -2008,6 +2011,13 @@ function selfTest() {
 	g = virtualForm(S, { protocol: 'vmess', happy_eyeballs: '1' });
 	eq('xray.happy', !!g('domain_strategy'), false);
 	eq('xray.default.protocol', virtualForm(S, {})('protocol').value, 'vmess');
+	/* 26.4-era options: cipher in `method`, pin in `tls_CertSha` */
+	g = virtualForm(S, { protocol: 'shadowsocks', method: 'chacha20-ietf-poly1305' });
+	eq('xray.ss.legacy_method', g('ss_method').value, 'chacha20-ietf-poly1305');
+	g = virtualForm(S, { protocol: 'shadowsocks', method: 'aes-128-gcm', ss_method: 'aes-256-gcm' });
+	eq('xray.ss.new_method_wins', g('ss_method').value, 'aes-256-gcm');
+	g = virtualForm(S, { protocol: 'vless', tls: '1', reality: '0', transport: 'raw', tls_CertSha: 'ab' });
+	eq('xray.legacy_pin', g('tls_pinSHA256').value, 'ab');
 
 	/* sing-box */
 	S = getSpecs('sing-box', Object.assign(ctx('normal'), { type: 'sing-box' }));

@@ -1561,8 +1561,23 @@ pub fn del_firewall_rule() {
     ip_cmd(&["-6", "rule", "del", "fwmark", FWMARK]);
     ip_cmd(&["-6", "route", "del", "local", "::/0", "dev", "lo", "table", "999"]);
 
+    // upstream quirk: upstream leaves `table inet passwall2` behind with its empty base chains;
+    // drop the table when nothing (rules, sets, maps) is left in it.
+    if let Some(t) = nft_out(&["-t", "list", "table", "inet", "passwall2"]) {
+        if table_is_empty(&t) {
+            nft_cmd(&format!("delete table {}", NFTABLE_NAME));
+        }
+    }
+
     del_script_mwan3();
     api::log_i18n(0, "Delete %s rules is complete.", &["nftables"]);
+}
+
+/// true if a `nft -t list table` listing holds only empty base chains (no rule, set, map, ...).
+pub fn table_is_empty(listing: &str) -> bool {
+    listing.lines().map(|l| l.trim()).all(|l| {
+        l.is_empty() || l == "}" || l.starts_with("table ") || (l.starts_with("chain ") && l.ends_with('{')) || (l.starts_with("type ") && l.contains(" hook ") && l.ends_with(';'))
+    })
 }
 
 /// `flush_nftset`: destroy every `psw2_*` set of `inet passwall2`.
@@ -1771,7 +1786,9 @@ pub fn cli(args: &[String]) -> i32 {
     match a(0) {
         "start" => {
             let env = NftEnv::from_system(&Config::load(util::CONFIG));
-            start(&env, &mut || {});
+            // inside the service start (app sets QUEUE_RUN=1) the ACL cores + dnsmasq copies are
+            // launched from load_acl, like app.sh's acl_node, so their DNS ports are known
+            start(&env, &mut crate::firewall::acl_node_hook);
             0
         }
         "stop" => {
@@ -1883,6 +1900,14 @@ pub fn cli(args: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn t_table_is_empty() {
+        let e = "table inet passwall2 {\n\tchain dstnat {\n\t\ttype nat hook prerouting priority dstnat - 1; policy accept;\n\t}\n}\n";
+        assert!(super::table_is_empty(e));
+        assert!(!super::table_is_empty("table inet passwall2 {\n\tset psw2_x {\n\t\ttype ipv4_addr\n\t}\n}\n"));
+        assert!(!super::table_is_empty("table inet passwall2 {\n\tchain dstnat {\n\t\ttype nat hook prerouting priority dstnat - 1; policy accept;\n\t\tjump PSW2_X\n\t}\n}\n"));
+    }
+
     use super::*;
 
     fn args(kv: &[(&str, &str)]) -> Args {

@@ -358,6 +358,20 @@ if ! pkg_installed xray-core && ! pkg_installed sing-box; then
 		fi
 	fi
 fi
+# The generated configs follow upstream PassWall 2, which targets current Xray/sing-box
+# releases (e.g. Xray >= 26 stream "method"); the OpenWrt base feed often ships much older
+# cores. Upgrade installed cores when a newer build (e.g. from the passwall feed) exists.
+if [ "$MINIMAL" = 0 ]; then
+	for p in xray-core sing-box; do
+		pkg_installed "$p" || continue
+		if [ "$PM" = apk ]; then
+			apk upgrade "$p" >/dev/null 2>&1 && info "upgraded $p (if a newer build was available)"
+		elif opkg list-upgradable 2>/dev/null | awk -v p="$p" '$1 == p { f = 1 } END { exit !f }'; then
+			info "upgrading $p"
+			opkg upgrade "$p" >/dev/null 2>&1 || warn "could not upgrade $p"
+		fi
+	done
+fi
 
 # ------------------------------------------------------------------ install
 info "installing passwall2-rs $NEW_VERSION"

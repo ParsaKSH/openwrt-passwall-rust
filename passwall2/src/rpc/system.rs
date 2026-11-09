@@ -298,16 +298,6 @@ fn bad_com() -> Value {
     json!({"code": 1, "error": "Invalid component."})
 }
 
-/// Our own package: upstream's self-update would replace it with upstream's Lua package.
-fn self_update_blocked() -> Option<Value> {
-    if api::is_install("luci-app-passwall2-rs") {
-        // upstream quirk: online self-update downloads upstream's luci-app-passwall2 packages,
-        // which would replace (and conflict with) passwall2-rs; update via the package manager.
-        return Some(json!({"code": 1, "error": "Online update is not available for passwall2-rs. Please update the luci-app-passwall2-rs package with the package manager."}));
-    }
-    None
-}
-
 /// `com_check {com}` (`check_<com>`, `check_passwall2`).
 pub fn com_check(p: &Params) -> Value {
     let com = p.s("com");
@@ -315,10 +305,9 @@ pub fn com_check(p: &Params) -> Value {
         return bad_com();
     }
     if com == api::APPNAME {
-        if let Some(e) = self_update_blocked() {
-            return e;
-        }
-        return api::to_check_self(p.get("accept_language").as_deref());
+        // passwall2-rs updates itself from its own GitHub releases (not upstream's packages)
+        let _ = p.get("accept_language");
+        return api::to_check_self_rs();
     }
     api::to_check(p.get("arch").as_deref().filter(|a| !a.is_empty()), &com)
 }
@@ -341,11 +330,8 @@ fn app_update(p: &Params) -> Value {
     if task == "progress" {
         return api::to_download_progress(api::APPNAME, &id, p.get("total_size").as_deref());
     }
-    if let Some(e) = self_update_blocked() {
-        return e;
-    }
     if task == "install" {
-        return api::to_install_self(&id, &p.s("force"), p.get("languages").as_deref());
+        return api::to_install_self_rs(&id, &p.s("force"));
     }
     let Some(part) = parse_part(p.num("part")) else { return invalid_task() };
     api::to_download(api::APPNAME, &p.s("url"), p.get("size").as_deref(), Some(&format!("{}{}", id, part)), part > 1)
@@ -477,7 +463,7 @@ pub fn reset_config() -> Value {
     json!({"redirect": ""})
 }
 
-fn purge_luci_cache_and_restart_rpcd() {
+fn purge_luci_cache() {
     if let Ok(rd) = std::fs::read_dir("/tmp") {
         for e in rd.flatten() {
             if e.file_name().to_string_lossy().starts_with("luci-") {
@@ -485,20 +471,21 @@ fn purge_luci_cache_and_restart_rpcd() {
             }
         }
     }
-    // upstream restarts rpcd synchronously; we are rpcd's child, so do it detached and a
-    // moment later, after our reply has been delivered.
-    util::spawn_bg("/bin/sh", &["-c".to_string(), "sleep 1; /etc/init.d/rpcd restart".to_string()], "/dev/null");
+    // upstream restarts rpcd, which drops every LuCI session (logout) and does not refresh
+    // the menu: the ucode dispatcher keeps the page tree in memory inside uhttpd. Restart
+    // uhttpd instead (sessions live in rpcd), detached and after our reply was delivered.
+    util::spawn_bg("/bin/sh", &["-c".to_string(), "sleep 1; [ -x /etc/init.d/uhttpd ] && /etc/init.d/uhttpd restart".to_string()], "/dev/null");
 }
 
 pub fn show_menu() -> Value {
     api::sh_uci_del(C, "@global[0]", "hide_from_luci", true);
-    purge_luci_cache_and_restart_rpcd();
+    purge_luci_cache();
     json!({"redirect": ""})
 }
 
 pub fn hide_menu() -> Value {
     api::sh_uci_set(C, "@global[0]", "hide_from_luci", "1", true);
-    purge_luci_cache_and_restart_rpcd();
+    purge_luci_cache();
     json!({"redirect": "/admin/status/overview"})
 }
 

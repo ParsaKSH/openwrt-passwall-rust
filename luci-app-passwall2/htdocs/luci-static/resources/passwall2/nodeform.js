@@ -344,8 +344,8 @@ function callSafe(method, params) {
 /*
  * loadEnv(): binary/capability detection + node lists.
  * Capabilities upstream computes server side are detected with fs.list() (allowed by luci-base ACL)
- * and the rpc `com_version`; sing-box build tags come from rpc `get_singbox_tags` when provided by
- * the backend, else from `sing-box version` via fs.exec_direct, else a conservative default.
+ * and the rpc `com_version`; sing-box version / build tags come from rpc `com_version` / `get_singbox_tags`, else a
+ * conservative default.
  */
 function loadEnv() {
 	var env = { bins: {} };
@@ -391,14 +391,9 @@ function loadEnv() {
 			callSafe('com_version', { com: 'sing-box' }),
 			callSafe('get_singbox_tags', {}),
 		]).then(function(res) {
-			var ver = res[0] && (res[0].data || res[0].result) || '';
-			var tags = res[1] && (res[1].result || res[1].tags || res[1].data) || '';
-			if (ver && tags) return [ver, tags];
-			return L.resolveDefault(fs.exec_direct(env.singbox_path, ['version']), '').then(function(out) {
-				out = out || '';
-				var mv = /^sing-box version (\S+)/m.exec(out), mt = /^Tags:\s*(.*)$/m.exec(out);
-				return [ver || (mv ? mv[1] : ''), tags || (mt ? mt[1] : (out ? '' : null))];
-			});
+			var ver = res[0] && res[0].code == 1 && res[0].data || '';
+			var tags = res[1] && typeof(res[1].result) == 'string' ? res[1].result : null;
+			return [ver, tags || null];
 		}).then(function(vt) {
 			env.singbox_version = String(vt[0] || '').replace(/^v/, '');
 			/* unknown tags (no backend support / no exec permission): assume the usual OpenWrt build */

@@ -143,7 +143,7 @@ impl Config {
         if !self.sections.iter().any(|s| s.anonymous) {
             return;
         }
-        let Ok(out) = uci_cmd().args(["-q", "show", &self.name]).output() else { return };
+        let Ok(out) = uci_cmd().args(["-q", "-X", "show", &self.name]).output() else { return };
         let text = String::from_utf8_lossy(&out.stdout);
         let prefix = format!("{}.", self.name);
         let names: Vec<String> = text

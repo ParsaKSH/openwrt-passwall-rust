@@ -25,7 +25,7 @@
 //!
 //! Extra methods (no upstream endpoint; replace server-side rendering of the Lua CBI pages):
 //! `job_status`, `get_env`, `get_valid_nodes`, `get_node_list`, `set_auto_lang`,
-//! `reorder_sections`, `rule_status`.
+//! `reorder_sections`, `rule_status`, `get_singbox_tags` (result = "tag1,tag2").
 
 mod env;
 mod jobs;
@@ -141,6 +141,7 @@ pub static METHODS: &[Method] = &[
     m!("set_auto_lang", "accept_language" => S),
     m!("reorder_sections", "config" => S, "ids" => S),
     m!("rule_status"),
+    m!("get_singbox_tags"),
 ];
 
 /// Upstream per-component route aliases → (generic method, com).
@@ -286,6 +287,7 @@ pub fn call_sync(method: &str, p: &Params) -> Option<Value> {
         "set_auto_lang" => system::set_auto_lang(p),
         "reorder_sections" => nodes::reorder_sections(p),
         "rule_status" => crate::rules::status_json(),
+        "get_singbox_tags" => json!({"result": crate::api::get_singbox_tags()}),
         _ => return None,
     };
     Some(v)
@@ -321,11 +323,27 @@ pub(crate) fn spawn_self(args: &[&str]) {
 }
 
 fn print_json(v: &Value) {
-    println!("{}", serde_json::to_string(v).unwrap_or_else(|_| "{}".into()));
+    // never panic (→ abort + core dump) when rpcd went away and closed our stdout
+    use std::io::Write;
+    let mut out = std::io::stdout().lock();
+    let _ = writeln!(out, "{}", serde_json::to_string(v).unwrap_or_else(|_| "{}".into()));
+    let _ = out.flush();
+}
+
+extern "C" {
+    fn umask(mask: u32) -> u32;
 }
 
 /// `passwall2 rpc <list|call <method>|job <id>>`
+
 pub fn cli(args: &[String]) -> i32 {
+    // rpcd runs plugins with umask 077; upstream's controller ran under uhttpd (022). Files and
+    // services created from here (rules, service restarts, dnsmasq confs read by the dnsmasq
+    // user, ...) must stay world-readable like upstream's.
+    // SAFETY: umask(2) only changes this process' file mode creation mask.
+    unsafe {
+        umask(0o022);
+    }
     match args.first().map(|s| s.as_str()) {
         Some("list") => {
             print_json(&list_json());

@@ -918,14 +918,10 @@ return view.extend({
 		window.location.href = pw.url('node_list');
 	},
 
+	/* add_node / copy_node return the new section id as `result` */
 	idFromResult: function(res) {
-		if (!res) return null;
-		var cands = [res.result, res.uid, res.id, res.data && res.data.uid];
-		for (var i = 0; i < cands.length; i++)
-			if (typeof cands[i] === 'string' && /^[A-Za-z0-9_]+$/.test(cands[i])) return cands[i];
-		var r = res.redirect || res.redirect_url || res.url || '';
-		var m = /node_config\/([A-Za-z0-9_]+)/.exec(String(r));
-		return m ? m[1] : null;
+		var id = res && res.result;
+		return (typeof id === 'string' && /^[A-Za-z0-9_]+$/.test(id)) ? id : null;
 	},
 
 	handleAdd: function() {

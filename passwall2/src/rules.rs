@@ -533,6 +533,10 @@ impl Updater {
             util::shq(tmp_path),
             util::shq(asset_path)
         ));
+        // the download inherits the caller's umask (rpcd: 077); keep geo files world-readable
+        // like the packaged ones
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(asset_path, std::fs::Permissions::from_mode(0o644));
         self.reboot = true;
     }
 

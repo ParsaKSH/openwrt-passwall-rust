@@ -1618,6 +1618,30 @@ function addShuntOptions(section, opts) {
 	return result;
 }
 
+/* ------------------------------------------------------------------ backend language
+ * With luci.main.lang = auto the backend (logs, subscriptions, ...) translates with
+ * passwall2.@global[0].auto_lang, which upstream's controller stores from the browser's
+ * Accept-Language. Do the same once per browser session. */
+(function syncAutoLang() {
+	let langs = [];
+	try {
+		if (window.sessionStorage && sessionStorage.getItem('pw2-auto-lang'))
+			return;
+	}
+	catch (e) {}
+	try {
+		langs = (navigator.languages && navigator.languages.length) ? Array.from(navigator.languages) : [ navigator.language || '' ];
+	}
+	catch (e) {}
+	langs = langs.filter((l) => !!l);
+	if (!langs.length)
+		return;
+	const accept = langs.map((l, i) => i ? l + ';q=' + Math.max(0.1, 1 - i / 10).toFixed(1) : l).join(',');
+	L.resolveDefault(call('set_auto_lang', { accept_language: accept }), null).then(() => {
+		try { sessionStorage.setItem('pw2-auto-lang', accept); } catch (e) {}
+	});
+})();
+
 /* ------------------------------------------------------------------ export */
 
 return baseclass.extend({

@@ -1382,18 +1382,10 @@ return view.extend({
 				var info = { path: sbPath, has: has, sbVersion: sbVersion, netdevs: r[6] || [] };
 				if (!has.singbox)
 					return info;
-				/* `sing-box version` -> Tags (needs file exec ACL; otherwise assume the stock build tags) */
-				return L.resolveDefault(fs.exec_direct(sbPath, [ 'version' ]), null).then(function(out) {
-					var tags = null, ver = null, m;
-					if (out) {
-						if ((m = /^Tags:\s*(.*)$/m.exec(out)) != null)
-							tags = m[1];
-						if ((m = /^sing-box version (\S+)/m.exec(out)) != null)
-							ver = m[1];
-					}
-					info.sbTags = (tags != null) ? tags : 'with_quic,with_utls,with_wireguard';
-					if (!info.sbVersion && ver)
-						info.sbVersion = ver;
+				/* sing-box build tags from the backend (rpc get_singbox_tags); unknown -> stock build tags */
+				return L.resolveDefault(pw.call('get_singbox_tags', {}), null).then(function(res) {
+					var tags = (res && typeof(res.result) == 'string') ? res.result : null;
+					info.sbTags = tags ? tags : 'with_quic,with_utls,with_wireguard';
 					return info;
 				});
 			});

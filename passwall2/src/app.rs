@@ -751,6 +751,11 @@ pub fn get_config(cfg: &Config) -> Ctx {
 }
 
 /// `grep -qw WORD` (word = `[A-Za-z0-9_]+`).
+/// `dnsmasq -v` lists compile options as whitespace-separated tokens (`nftset` / `no-nftset`).
+pub fn dnsmasq_has_opt(info: &str, opt: &str) -> bool {
+    info.split_whitespace().any(|t| t == opt)
+}
+
 pub fn has_word(text: &str, w: &str) -> bool {
     let wc = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
     let b = text.as_bytes();
@@ -771,9 +776,11 @@ pub fn check_run_environment(cfg: &Config, quiet: bool) -> (String, bool) {
     let prefer_nft = cfg.get_or("@global_forwarding[0]", "prefer_nft", "1");
     let info = util::cmd_out("dnsmasq", &["-v"]);
     let ver = info.lines().next().and_then(|l| l.rfind("version ").map(|i| l[i + 8..].chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect::<String>())).unwrap_or_default();
-    // upstream quirk kept: `grep -w ipset` also matches "no-ipset" in the compile options
-    let dnsmasq_ipset = has_word(&info, "ipset") as u8;
-    let dnsmasq_nftset = has_word(&info, "nftset") as u8;
+    // upstream quirk: `grep -w nftset` also matches "no-nftset" in the compile options, so a
+    // stock dnsmasq (no-ipset no-nftset) was taken as nftset-capable and the generated
+    // nftset directives made the ACL dnsmasq fail to start; match the exact option instead.
+    let dnsmasq_ipset = dnsmasq_has_opt(&info, "ipset") as u8;
+    let dnsmasq_nftset = dnsmasq_has_opt(&info, "nftset") as u8;
     let has_ipt = (command_v("iptables-legacy").is_some() || command_v("iptables").is_some()) as u8;
     let has_ipset = command_v("ipset").is_some() as u8;
     let has_fw4 = command_v("fw4").is_some() as u8;
@@ -2317,6 +2324,9 @@ mod tests {
         assert!(has_1_65535("80,1-65535"));
         assert!(!has_1_65535("1:6553"));
         assert!(has_word("Compile time options: IPv6 no-ipset nftset", "nftset"));
+        assert!(dnsmasq_has_opt("Compile time options: IPv6 no-ipset nftset", "nftset"));
+        assert!(!dnsmasq_has_opt("Compile time options: IPv6 no-ipset no-nftset auth", "nftset"));
+        assert!(!dnsmasq_has_opt("Compile time options: IPv6 no-ipset nftset", "ipset"));
         assert!(has_word("no-ipset", "ipset"));
         assert!(!has_word("ipsets", "ipset"));
         assert_eq!(cmd_check("/tmp/etc/passwall2/bin/xray  run -c /a.json >/dev/null"), "/tmp/etc/passwall2/bin/xray run -c /a.json");

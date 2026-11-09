@@ -40,7 +40,7 @@ check_ipk() {
 		local p
 		for p in etc/init.d/passwall2 etc/init.d/passwall2_server etc/uci-defaults/luci-app-passwall2 \
 			etc/uci-defaults/luci-app-passwall2_server etc/hotplug.d/iface/98-passwall2 \
-			etc/hotplug.d/ntp/30-passwall2-resync usr/libexec/rpcd/luci.passwall2; do
+			etc/hotplug.d/ntp/30-passwall2-resync usr/libexec/rpcd/luci.passwall2 usr/share/passwall2/haproxy_check.sh; do
 			[ -x "$d/r/$p" ] || bad "$f: $p missing or not executable"
 		done
 		for p in etc/config/passwall2_server usr/share/passwall2/0_default_config usr/share/passwall2/direct_ip \

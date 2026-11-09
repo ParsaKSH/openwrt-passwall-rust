@@ -2690,7 +2690,7 @@ pub fn get_version() -> String {
     let vf = format!("{}/passwall2_version", CACHE_PATH);
     let mut v = trim(&util::read(&vf));
     if v.is_empty() {
-        for pkg in ["luci-app-passwall2", "luci-app-passwall2-rs"] {
+        for pkg in ["luci-app-passwall2-rs", "luci-app-passwall2"] {
             v = trim(&util::sh(&format!("opkg list-installed {} 2>/dev/null | awk '{{print $3}}'", pkg)));
             if v.is_empty() {
                 let line = trim(&util::sh(&format!("apk list {} 2>/dev/null | awk '/installed/ {{print $1}}'", pkg)));
@@ -2878,6 +2878,157 @@ pub fn to_install_self(id: &str, force: &str, languages: Option<&str>) -> Value 
     let _ = std::fs::write(&status, "{\"installing\":true}");
     util::sh_ok(&format!(
         "nohup {} {} {} {} {} >/dev/null 2>&1 </dev/null &",
+        util::shq(&script),
+        util::shq(&dir),
+        util::shq(&status),
+        manager,
+        if force == "1" { "1" } else { "0" }
+    ));
+    json!({"code": 0})
+}
+
+// ====================================================================== self update (passwall2-rs)
+
+/// GitHub API endpoint of our own releases (assets named by packaging/build.sh).
+pub const SELF_RELEASE_API: &str = "https://api.github.com/repos/ParsaKSH/openwrt-passwall-rust/releases/latest";
+
+/// Package architecture of this system (`opkg print-architecture` highest priority / `apk --print-arch`).
+pub fn pkg_arch() -> String {
+    if util::sh_ok("command -v apk >/dev/null 2>&1") {
+        let a = trim(&util::sh("apk --print-arch 2>/dev/null"));
+        if !a.is_empty() {
+            return a;
+        }
+    }
+    let a = trim(&util::sh(
+        "opkg print-architecture 2>/dev/null | awk '$1 == \"arch\" && $2 != \"all\" && $2 != \"noarch\" { print $3, $2 }' | sort -n | tail -n 1 | cut -d' ' -f2",
+    ));
+    if !a.is_empty() {
+        return a;
+    }
+    release_value("/etc/openwrt_release", "DISTRIB_ARCH").unwrap_or_default()
+}
+
+/// Release version `v26.11.0[-N]` → comparable package version `26.11.0-N` (release 1 by default,
+/// like build.sh's PKG_RELEASE).
+pub fn self_remote_version(tag: &str) -> String {
+    let v = normalize_pkg_version(tag.trim().trim_start_matches(['v', 'V']));
+    match v.rfind('-') {
+        Some(i) if i + 1 < v.len() && v[i + 1..].bytes().all(|b| b.is_ascii_digit()) => v,
+        _ => format!("{}-1", v),
+    }
+}
+
+/// Parse a `SHA256SUMS` file → name → `sha256:<hex>`.
+pub fn parse_sha256sums(text: &str) -> std::collections::HashMap<String, String> {
+    let mut m = std::collections::HashMap::new();
+    for l in text.lines() {
+        let mut it = l.split_whitespace();
+        if let (Some(h), Some(n)) = (it.next(), it.next()) {
+            if h.len() == 64 && h.bytes().all(|c| c.is_ascii_hexdigit()) {
+                m.insert(n.trim_start_matches('*').to_string(), format!("sha256:{}", h.to_lowercase()));
+            }
+        }
+    }
+    m
+}
+
+/// Self-update check against our own GitHub releases → same shape as upstream's
+/// `to_check_self`: `{code:0, has_update, local_version, remote_version, html_url,
+/// data:<luci asset>, i18n:[<backend asset>], languages:""}` or `{code:1, error}`.
+pub fn to_check_self_rs() -> Value {
+    let gh = Config::load(C_CONFIG).get("@global_app[0]", "gh_proxy_url").unwrap_or_default();
+    // PW2_RELEASE_API: test override (e.g. a local mirror of the release JSON)
+    let url_s = std::env::var("PW2_RELEASE_API").ok().filter(|u| !u.is_empty()).unwrap_or_else(|| SELF_RELEASE_API.to_string());
+    let url = url_s.as_str();
+    let mut args = curl_args();
+    args.push("-w '\\n%{http_code}'".into());
+    let (rc, out) = if !gh.is_empty() { curl_direct(&format!("{}{}", gh, url), None, &args) } else { curl_auto(url, None, &args) };
+    let (body, code) = match out.trim_end().rsplit_once('\n') {
+        Some((b, c)) => (b.to_string(), c.trim().to_string()),
+        None => (String::new(), out.trim().to_string()),
+    };
+    if code == "404" {
+        return err("No release of passwall2-rs has been published yet.".to_string());
+    }
+    if rc != 0 || body.is_empty() {
+        return err(translate("Get remote version info failed."));
+    }
+    let rel: Value = serde_json::from_str(&body).unwrap_or(json!({}));
+    let Some(tag) = rel["tag_name"].as_str().map(|s| s.to_string()) else {
+        return err(translate("Get remote version info failed."));
+    };
+    let local = get_version();
+    let remote = self_remote_version(&tag);
+    let apk = util::sh_ok("command -v apk >/dev/null 2>&1");
+    let arch = pkg_arch();
+    let (luci_name, bin_name) = if apk {
+        ("luci-app-passwall2-rs_noarch.apk".to_string(), format!("passwall2-rs_{}.apk", arch))
+    } else {
+        ("luci-app-passwall2-rs_all.ipk".to_string(), format!("passwall2-rs_{}.ipk", arch))
+    };
+    let assets = rel["assets"].as_array().cloned().unwrap_or_default();
+    let find = |n: &str| assets.iter().find(|a| a["name"].as_str() == Some(n)).cloned();
+    let html_url = rel["html_url"].clone();
+    let (Some(mut luci), Some(mut bin)) = (find(&luci_name), find(&bin_name)) else {
+        return json!({
+            "code": 1, "local_version": local, "remote_version": remote, "html_url": html_url,
+            "error": translate("New version found, but failed to get new version download url.")
+        });
+    };
+    // assets without a GitHub digest: take it from the release's SHA256SUMS
+    if luci["digest"].as_str().is_none() || bin["digest"].as_str().is_none() {
+        if let Some(sums_url) = find("SHA256SUMS").and_then(|a| a["browser_download_url"].as_str().map(|s| s.to_string())) {
+            let (rc, t) = if !gh.is_empty() { curl_direct(&format!("{}{}", gh, sums_url), None, &curl_args()) } else { curl_auto(&sums_url, None, &curl_args()) };
+            if rc == 0 {
+                let m = parse_sha256sums(&t);
+                for a in [&mut luci, &mut bin] {
+                    if a["digest"].as_str().is_none() {
+                        if let Some(d) = a["name"].as_str().and_then(|n| m.get(n)) {
+                            a["digest"] = json!(d);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    cache_update_digests(APPNAME, &[&luci, &bin]);
+    let local_cmp = if local.is_empty() { "0".to_string() } else { local.clone() };
+    json!({
+        "code": 0, "has_update": compare_versions(&local_cmp, "<", &remote), "local_version": local,
+        "remote_version": remote, "html_url": html_url, "data": luci, "i18n": [bin], "languages": ""
+    })
+}
+
+/// Install the downloaded self-update packages (part 1 = luci-app-passwall2-rs, part 2 =
+/// passwall2-rs) with `luci_update.sh` in the background → `{code:0}` / `{code:1}`.
+pub fn to_install_self_rs(id: &str, force: &str) -> Value {
+    if !valid_task_id(id) {
+        return json!({"code": 1});
+    }
+    let dir = format!("/tmp/{}_luci_update.{}", APPNAME, id);
+    let apk = util::sh_ok("command -v apk >/dev/null 2>&1");
+    let (manager, ext) = if apk { ("apk", ".apk") } else { ("opkg", ".ipk") };
+    let status_dir = format!("/www/luci-static/resources/{}-update", APPNAME);
+    let status = format!("{}/{}.json", status_dir, id);
+    let _ = std::fs::create_dir(&dir);
+    let _ = std::fs::create_dir(&status_dir);
+    let fail = |d: &str| {
+        remove(&[d]);
+        json!({"code": 1})
+    };
+    for (part, name) in [(1, "luci-app-passwall2-rs"), (2, "passwall2-rs")] {
+        if exec("/bin/mv", &[&format!("/tmp/{}_download.{}{}", APPNAME, id, part), &format!("{}/{}{}", dir, name, ext)], None) != Some(0) {
+            return fail(&dir);
+        }
+    }
+    let script = format!("{}/luci_update.sh", util::APP_PATH);
+    if !util::exists(&script) {
+        return fail(&dir);
+    }
+    let _ = std::fs::write(&status, "{\"installing\":true}");
+    util::sh_ok(&format!(
+        "setsid /bin/sh {} {} {} {} {} >/dev/null 2>&1 </dev/null &",
         util::shq(&script),
         util::shq(&dir),
         util::shq(&status),

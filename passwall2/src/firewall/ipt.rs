@@ -1680,9 +1680,10 @@ pub fn cli(args: &[String]) -> i32 {
                 "flush_ipset" => fw.flush_ipset(),
                 "stop" => fw.stop(),
                 _ => {
-                    // standalone start: ACL cores are expected to be running already
+                    // inside the service start (QUEUE_RUN=1) launch the ACL cores from load_acl
+                    // (app.sh's acl_node); standalone: they are expected to be running already
                     let ctx = Ctx::from_system(&cfg);
-                    fw.start(&ctx, &mut || {});
+                    fw.start(&ctx, &mut crate::firewall::acl_node_hook);
                 }
             }
             0

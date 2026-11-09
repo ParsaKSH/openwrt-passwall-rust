@@ -3,38 +3,115 @@
 		"description": "Grant UCI and RPC access for luci-app-passwall2",
 		"read": {
 			"ubus": {
-				"luci.passwall2": [ "*" ],
-				"file": [ "read", "stat", "list" ],
-				"luci": [ "getInitList", "getFeatures" ],
-				"luci-rpc": [ "getHostHints", "getNetworkDevices", "getBoardJSON" ],
-				"network.interface": [ "dump" ],
-				"uci": [ "get", "changes" ]
+				"luci.passwall2": [
+					"*"
+				],
+				"file": [
+					"read",
+					"stat",
+					"list"
+				],
+				"luci": [
+					"getInitList",
+					"getFeatures"
+				],
+				"luci-rpc": [
+					"getHostHints",
+					"getNetworkDevices",
+					"getBoardJSON",
+					"getWirelessDevices",
+					"getDHCPLeases"
+				],
+				"network.interface": [
+					"dump"
+				],
+				"uci": [
+					"get",
+					"state",
+					"changes"
+				]
 			},
 			"file": {
-				"/proc/modules": [ "read" ],
-				"/tmp/etc/passwall2/var": [ "read" ],
-				"/tmp/etc/passwall2/*": [ "list", "read" ],
-				"/tmp/etc/passwall2_server/*": [ "list", "read" ],
-				"/tmp/log/passwall2.log": [ "read" ],
-				"/tmp/log/passwall2_server.log": [ "read" ],
-				"/tmp/bak_v2ray/*": [ "list" ],
-				"/usr/share/passwall2/direct_ip": [ "read" ],
-				"/usr/share/passwall2/domains_excluded": [ "read" ],
-				"/usr/share/v2ray/*": [ "list" ]
+				"/proc/modules": [
+					"read"
+				],
+				"/tmp/etc/passwall2/var": [
+					"read"
+				],
+				"/tmp/etc/passwall2/*": [
+					"list",
+					"read"
+				],
+				"/tmp/etc/passwall2_server/*": [
+					"list",
+					"read"
+				],
+				"/tmp/log/passwall2.log": [
+					"read"
+				],
+				"/tmp/log/passwall2_server.log": [
+					"read"
+				],
+				"/tmp/bak_v2ray/*": [
+					"list",
+					"read"
+				],
+				"/usr/share/passwall2/direct_ip": [
+					"read"
+				],
+				"/usr/share/passwall2/domains_excluded": [
+					"read"
+				],
+				"/usr/share/v2ray/*": [
+					"list",
+					"read"
+				],
+				"/tmp/etc/passwall2/acl/*": [
+					"list",
+					"read"
+				]
 			},
-			"uci": [ "passwall2", "passwall2_server", "network", "dhcp", "firewall" ]
+			"uci": [
+				"passwall2",
+				"passwall2_server",
+				"network",
+				"dhcp",
+				"firewall",
+				"wireless",
+				"luci"
+			]
 		},
 		"write": {
 			"ubus": {
-				"luci.passwall2": [ "*" ],
-				"file": [ "write" ],
-				"uci": [ "add", "apply", "confirm", "delete", "order", "rename", "set" ]
+				"luci.passwall2": [
+					"*"
+				],
+				"file": [
+					"write"
+				],
+				"uci": [
+					"add",
+					"apply",
+					"confirm",
+					"delete",
+					"order",
+					"rename",
+					"revert",
+					"set"
+				]
 			},
 			"file": {
-				"/usr/share/passwall2/direct_ip": [ "write" ],
-				"/usr/share/passwall2/domains_excluded": [ "write" ]
+				"/usr/share/passwall2/direct_ip": [
+					"write"
+				],
+				"/usr/share/passwall2/domains_excluded": [
+					"write"
+				]
 			},
-			"uci": [ "passwall2", "passwall2_server" ]
+			"uci": [
+				"passwall2",
+				"passwall2_server"
+			]
 		}
 	}
 }

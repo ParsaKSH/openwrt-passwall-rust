@@ -327,7 +327,6 @@ return view.extend({
 					const chunk = base64Data.substring(current * chunkSize, (current + 1) * chunkSize);
 					return pw.call('restore_backup', {
 						filename: file.name,
-						file_name: file.name,
 						chunk: chunk,
 						chunk_index: String(current),
 						total_chunks: String(totalChunks)

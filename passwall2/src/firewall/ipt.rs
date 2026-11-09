@@ -1377,7 +1377,10 @@ impl<'a> Fw<'a> {
 
         self.load_acl(&ctx.acl_flags, acl_node);
 
-        self.sys.spawn_bg("filter_direct_node_list");
+        // upstream quirk: upstream runs this in the background, racing gen_include (the include
+        // then sometimes misses the node RETURN rules). It is a handful of local rules, so it runs
+        // in the foreground here and the include always captures them.
+        self.filter_direct_node_list();
 
         if !ipt_n_needed {
             for c in ["PSW2", "PSW2_OUTPUT"] {
@@ -1945,7 +1948,7 @@ config shunt_rules 'sr3'\n\toption group 'other'\n",
         pos(&cmds, "ipset -! add psw2_direct6 fc00::/7");
         pos(&cmds, "ipset -! add psw2_wan 100.1.2.3");
         pos(&cmds, "ipset -! add psw2_direct 223.5.5.5");
-        assert_eq!(m.bg, vec!["filter_vpsip", "filter_haproxy", "filter_direct_node_list"]);
+        assert_eq!(m.bg, vec!["filter_vpsip", "filter_haproxy"]);
         // nat base (redirect + icmp): no prerouting_rule → appended
         let a = pos(&cmds, "iptables -t nat -w -A PREROUTING -m set ! --match-set psw2_direct dst -p icmp -j PSW2");
         let b = pos(&cmds, "iptables -t nat -w -A PREROUTING -m set ! --match-set psw2_direct dst -p tcp -j PSW2");

@@ -65,7 +65,8 @@ fn tostr(v: &Yaml) -> String {
     match v {
         Yaml::Null => String::new(),
         Yaml::Bool(b) => b.to_string(),
-        Yaml::Num(s) | Yaml::Str(s) => s.clone(),
+        Yaml::Str(s) => s.clone(),
+        Yaml::Num(s) => super::yaml::num_text(s),
         Yaml::Seq(s) => s.first().map(tostr).unwrap_or_default(),
         Yaml::Map(_) => String::new(),
     }
@@ -73,7 +74,8 @@ fn tostr(v: &Yaml) -> String {
 /// `..` concatenation: strings and numbers only, anything else raises.
 fn cat(v: Option<&Yaml>) -> Result<String, Fail> {
     match v {
-        Some(Yaml::Str(s)) | Some(Yaml::Num(s)) => Ok(s.clone()),
+        Some(Yaml::Str(s)) => Ok(s.clone()),
+        Some(Yaml::Num(s)) => Ok(super::yaml::num_text(s)),
         _ => Err(Fail),
     }
 }
@@ -631,7 +633,8 @@ fn encode_ss(node: &Yaml) -> ER {
                 if let Some(v) = v {
                     let vs = match v {
                         Yaml::Bool(b) => if b { "1".to_string() } else { "0".to_string() },
-                        Yaml::Str(s) | Yaml::Num(s) => s,
+                        Yaml::Str(s) => s,
+                        Yaml::Num(s) => super::yaml::num_text(&s),
                         _ => return Err(Fail),
                     };
                     opts.push(format!("{}={}", k, vs));
@@ -1102,6 +1105,8 @@ fn local_date(expire: u64) -> String {
 /// `parse_clash_sub_info(headers)`: `Subscription-Userinfo: upload=..; download=..; total=..;
 /// expire=..` → remaining traffic and expiry date.
 pub fn parse_clash_sub_info(headers: &str) -> Option<SubInfo> {
+    // upstream quirk: the Lua pattern `[Ss]ubscription%-userinfo:` misses `Subscription-Userinfo`
+    // (HTTP/1.1 servers that capitalise it); header names are case-insensitive, so match any case.
     let lower = headers.to_ascii_lowercase();
     let i = lower.find("subscription-userinfo:")?;
     let rest = &headers[i + "subscription-userinfo:".len()..];

@@ -392,8 +392,10 @@ pub fn gen_config(path: &str, conf: &str) -> bool {
     for (port, list) in &listens {
         api::log(1, &api::translatef("Entrance %s:%s", &[g.bind_address(), &port.to_string()]));
         for o in list {
-            if o.export.as_deref() != Some("0") {
-                add_ip2route(&o.origin_address, o.export.as_deref().unwrap_or(""));
+            // upstream quirk: an unset `export` makes haproxy.lua crash (string.format with nil)
+            // and leaves the config without the remaining servers/console; we treat it as "0".
+            if let Some(iface) = o.export.as_deref().filter(|e| !e.is_empty() && *e != "0") {
+                add_ip2route(&o.origin_address, iface);
             }
             api::log(2, &api::translatef("Node: %s:%s, Weight: %s", &[&o.origin_address, &o.origin_port, &o.lbweight]));
         }

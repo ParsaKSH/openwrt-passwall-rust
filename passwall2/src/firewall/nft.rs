@@ -1514,7 +1514,10 @@ pub fn add_firewall_rule(env: &NftEnv, acl_node: &mut dyn FnMut()) {
         ip_cmd(&["-6", "route", "add", "local", "::/0", "dev", "lo", "table", "999"]);
     }
 
-    spawn_self(&["nft", "filter_direct_node_list"]);
+    // upstream quirk: upstream runs this in the background, racing gen_include (PSW2_RULE.nft
+    // then sometimes misses the node RETURN rules); it only adds a few local rules, so run it
+    // in the foreground.
+    filter_direct_node_list();
 
     api::log_i18n(0, "%s firewall rules load complete!", &["nftables"]);
 }
@@ -1561,16 +1564,20 @@ pub fn del_firewall_rule() {
     ip_cmd(&["-6", "rule", "del", "fwmark", FWMARK]);
     ip_cmd(&["-6", "route", "del", "local", "::/0", "dev", "lo", "table", "999"]);
 
-    // upstream quirk: upstream leaves `table inet passwall2` behind with its empty base chains;
-    // drop the table when nothing (rules, sets, maps) is left in it.
+    drop_table_if_empty();
+
+    del_script_mwan3();
+    api::log_i18n(0, "Delete %s rules is complete.", &["nftables"]);
+}
+
+/// upstream quirk: upstream leaves `table inet passwall2` behind with its empty base chains;
+/// drop the table when nothing (rules, sets, maps) is left in it.
+fn drop_table_if_empty() {
     if let Some(t) = nft_out(&["-t", "list", "table", "inet", "passwall2"]) {
         if table_is_empty(&t) {
             nft_cmd(&format!("delete table {}", NFTABLE_NAME));
         }
     }
-
-    del_script_mwan3();
-    api::log_i18n(0, "Delete %s rules is complete.", &["nftables"]);
 }
 
 /// true if a `nft -t list table` listing holds only empty base chains (no rule, set, map, ...).
@@ -1657,6 +1664,8 @@ pub fn stop() {
             }
         }
         util::rm_rf(&format!("{}/geo_output", util::TMP_PATH2));
+        // the shunt/white sets kept the table alive in del_firewall_rule
+        drop_table_if_empty();
     }
     flush_include();
 }

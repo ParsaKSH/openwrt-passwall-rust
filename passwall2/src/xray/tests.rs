@@ -487,3 +487,29 @@ fn server_socks_outbound_and_hysteria() {
     assert!(o.get("_id").is_none() && o.get("_flag").is_none());
     assert_eq!(c["routing"]["rules"][0]["outboundTag"], "direct");
 }
+
+#[test]
+fn client_tls_certificate_is_a_list() {
+    let conf = "config nodes 'n1'\n\toption type 'Xray'\n\toption protocol 'trojan'\n\toption address '1.2.3.4'\n\toption port '443'\n\
+                \toption password 'p'\n\toption tls '1'\n\toption transport 'raw'\n\toption tls_certificate '1'\n\
+                \toption tls_certificate_pem '-----BEGIN-----\\nAB\\n-----END-----'\n";
+    let o = out_of(conf, "n1");
+    assert_eq!(
+        o["streamSettings"]["tlsSettings"]["certificates"],
+        json!([{"certificate": ["-----BEGIN-----", "AB", "-----END-----"], "usage": "verify"}])
+    );
+}
+
+#[test]
+fn server_reality_lists_always_arrays() {
+    let cfg_s = Config::parse(
+        "passwall2_server",
+        "config server 's1'\n\toption type 'Xray'\n\toption protocol 'vless'\n\toption port '443'\n\toption transport 'raw'\n\
+         \toption tcp_guise 'none'\n\toption tls '1'\n\toption reality '1'\n\toption reality_serverNames 'one.com'\n",
+    );
+    let cfg_c = Config::parse("passwall2", "");
+    let c = server_config(&cfg_c, &cfg_s, node_of(cfg_s.section("s1").unwrap()), false);
+    let r = &c["inbounds"][0]["streamSettings"]["realitySettings"];
+    assert_eq!(r["serverNames"], json!(["one.com"]));
+    assert_eq!(r["shortIds"], json!([""]));
+}

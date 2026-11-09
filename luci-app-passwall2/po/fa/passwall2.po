@@ -2638,3 +2638,174 @@ msgstr "توجه: حالت خودکار تلاش می‌کند DNS گره را �
 
 msgid "Never expires"
 msgstr "بدون انقضا"
+
+msgid "Actions"
+msgstr "عملیات"
+
+msgid "Auto refresh"
+msgstr "بازخوانی خودکار"
+
+msgid "Back"
+msgstr "بازگشت"
+
+msgid "Cancel"
+msgstr "لغو"
+
+msgid "Configuration section %s is missing."
+msgstr "بخش پیکربندی %s وجود ندارد."
+
+msgid "Dismiss"
+msgstr "بستن"
+
+msgid "No core is installed (sing-box, Xray, sslocal or ssr-local)."
+msgstr "هیچ هسته‌ای نصب نشده است (sing-box، Xray، sslocal یا ssr-local)."
+
+msgid "Node Log"
+msgstr "گزارش گره"
+
+msgid "Node not found, returning to the node list..."
+msgstr "گره یافت نشد، بازگشت به فهرست گره‌ها..."
+
+msgid "Nodes"
+msgstr "گره‌ها"
+
+msgid "OK"
+msgstr "تأیید"
+
+msgid "Operation failed"
+msgstr "عملیات ناموفق بود"
+
+msgid "Refresh"
+msgstr "بازخوانی"
+
+msgid "Share"
+msgstr "اشتراک‌گذاری"
+
+msgid "Subscribe"
+msgstr "اشتراک"
+
+msgid "Test all visible nodes"
+msgstr "آزمایش همه گره‌های نمایش‌داده‌شده"
+
+msgid "The core of this node is not installed; its options cannot be edited."
+msgstr "هسته این گره نصب نشده است؛ گزینه‌های آن قابل ویرایش نیستند."
+
+msgid "This section contains no values yet"
+msgstr "این بخش هنوز هیچ مقداری ندارد"
+
+msgid "Unable to save contents: %s"
+msgstr "ذخیره محتوا ممکن نشد: %s"
+
+msgid "Upload failed!"
+msgstr "بارگذاری ناموفق بود!"
+
+msgid "Collecting data..."
+msgstr "در حال جمع‌آوری داده‌ها..."
+
+msgid "Delete"
+msgstr "حذف"
+
+msgid "Disable"
+msgstr "غیرفعال"
+
+msgid "Edit"
+msgstr "ویرایش"
+
+msgid "Enable"
+msgstr "فعال"
+
+msgid "Save"
+msgstr "ذخیره"
+
+msgid "Save & Apply"
+msgstr "ذخیره و اعمال"
+
+msgid "Settings"
+msgstr "تنظیمات"
+
+msgid "Status"
+msgstr "وضعیت"
+
+msgid "Network"
+msgstr "شبکه"
+
+msgid "Port"
+msgstr "پورت"
+
+msgid "Source"
+msgstr "مبدأ"
+
+msgid "User"
+msgstr "کاربر"
+
+msgid "Username"
+msgstr "نام کاربری"
+
+msgid "Version"
+msgstr "نسخه"
+
+msgid "-- Please choose --"
+msgstr "-- لطفاً انتخاب کنید --"
+
+msgid "-- custom --"
+msgstr "-- سفارشی --"
+
+msgid "DoH request address"
+msgstr "آدرس درخواست DoH"
+
+msgid "Format must be:"
+msgstr "قالب باید این‌گونه باشد:"
+
+msgid "Failed to delete."
+msgstr "حذف ناموفق بود."
+
+msgid "Save failed!"
+msgstr "ذخیره ناموفق بود!"
+
+msgid "Network Error"
+msgstr "خطای شبکه"
+
+msgid "No nodes!"
+msgstr "هیچ گره‌ای وجود ندارد!"
+
+msgid "No shunt_rules!"
+msgstr "هیچ قانون تقسیم ترافیک (shunt_rules) وجود ندارد!"
+
+msgid "Need node support required"
+msgstr "نیازمند پشتیبانی سمت گره است"
+
+msgid "format: dest,path,xver"
+msgstr "قالب: dest,path,xver"
+
+msgid "Sniffing Route Only"
+msgstr "Sniffing فقط برای مسیریابی"
+
+msgid "Fallback"
+msgstr "بازگشت (Fallback)"
+
+msgid "Keep Alive"
+msgstr "زنده نگه داشتن اتصال (Keep Alive)"
+
+msgid "Rule"
+msgstr "قانون"
+
+msgid "Dest"
+msgstr "مقصد"
+
+msgid "Public key"
+msgstr "کلید عمومی"
+
+msgid "Import Finished "
+msgstr "وارد کردن پایان یافت "
+
+msgid "default"
+msgstr "پیش‌فرض"
+
+msgid "reuse"
+msgstr "استفاده مجدد"
+
+msgid "native"
+msgstr "بومی (native)"
+
+msgid "none"
+msgstr "هیچ‌کدام"

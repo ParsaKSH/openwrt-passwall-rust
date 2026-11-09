@@ -266,7 +266,11 @@ pub fn ln_run(ctx: &Ctx, queue: bool, file_func: Option<&str>, ln_name: &str, ou
     let mut file_func = file_func.unwrap_or("").to_string();
     if file_func.contains('/') {
         let link = format!("{}/{}", TMP_BIN_PATH, ln_name);
-        if file_func != link {
+        // A symlink that already lives in TMP_BIN_PATH (first_type found e.g. bin/dnsmasq
+        // made by an earlier launch) is run directly, like upstream.
+        let in_bin = file_func.starts_with(&format!("{}/", TMP_BIN_PATH))
+            && std::fs::symlink_metadata(&file_func).map(|m| m.file_type().is_symlink()).unwrap_or(false);
+        if file_func != link && !in_bin {
             util::mkdir(TMP_BIN_PATH);
             // upstream quirk: when the binary itself is a symlink upstream runs it directly,
             // so `pgrep $TMP_BIN_PATH` (stop, monitor, kill-by-flag) cannot find it. We always

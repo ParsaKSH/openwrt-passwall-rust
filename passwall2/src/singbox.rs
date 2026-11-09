@@ -700,7 +700,15 @@ impl Gen {
                     t.insert("certificate_sha256".into(), arr(&[api::sha256_xray_sb(p)]));
                 }
             } else {
-                t.insert("insecure".into(), Value::Bool(node.is("tls_allowInsecure", "1") || pin.is_some()));
+                // Lua: `allowInsecure == "1" or (pin and pin ~= "")` → true, false (empty pin) or
+                // nil (no pin: the key is absent).
+                if node.is("tls_allowInsecure", "1") || pin.is_some() {
+                    t.insert("insecure".into(), Value::Bool(true));
+                } else if node.g("tls_pinSHA256").is_some() {
+                    t.insert("insecure".into(), Value::Bool(false));
+                } else {
+                    t.remove("insecure");
+                }
             }
             tls = Some(t);
         }
@@ -1716,7 +1724,10 @@ impl Gen {
                         for w in gsplit(p, &[',']) {
                             match api::lua_tonumber(&w) {
                                 Some(n) if (1.0..=65535.0).contains(&n) => port.push(num(n)),
-                                _ => range.push(w),
+                                // upstream quirk: upstream passes "1000-2000" (the Xray syntax the
+                                // shared shunt rule form suggests) through, which sing-box rejects
+                                // ("bad port range"); sing-box needs "1000:2000".
+                                _ => range.push(w.replace('-', ":")),
                             }
                         }
                         if !port.is_empty() {
@@ -2688,6 +2699,25 @@ mod tests {
     }
 
     #[test]
+    fn tls_insecure_pre_1_15() {
+        let cases: [(&[(&str, &str)], Option<bool>); 4] = [
+            (&[], None),
+            (&[("tls_allowInsecure", "0")], None),
+            (&[("tls_allowInsecure", "1")], Some(true)),
+            (&[("tls_pinSHA256", "")], Some(false)),
+        ];
+        for (extra, want) in cases {
+            let mut g = gen("", V112);
+            let mut n = node(&[(".name", "n1"), ("type", "sing-box"), ("protocol", "trojan"), ("address", "1.2.3.4"), ("port", "1"), ("tls", "1")]);
+            for (k, v) in extra {
+                n.set(k, v);
+            }
+            let o = Value::Object(g.gen_outbound(None, Some(n), None, None).unwrap());
+            assert_eq!(o["tls"].get("insecure").and_then(|v| v.as_bool()), want, "{extra:?}");
+        }
+    }
+
+    #[test]
     fn rule_set_parse() {
         let t = parse_rule_set("remote:https://x.y/rule-set/geosite-netflix.srs", true).unwrap();
         assert_eq!(Value::Object(t), json!({"type":"remote","tag":"rs_geosite-netflix","format":"binary","url":"https://x.y/rule-set/geosite-netflix.srs"}));
@@ -2913,7 +2943,7 @@ config shunt_rules 'r1'
 	option domain_list 'geosite:netflix\\nfull:a.com\\n#c\\nkeyword:x'
 	option ip_list 'geoip:private\\ngeoip:netflix\\n10.0.0.0/8'
 	option network 'tcp,udp'
-	option port '443,1000:2000'
+	option port '443,1000-2000'
 
 config shunt_rules 'r2'
 	option remarks 'R2'

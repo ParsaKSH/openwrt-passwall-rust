@@ -55,7 +55,8 @@ impl Yaml {
     /// Lua string value: strings and numbers (`type(v) == "string"` or a number).
     pub fn scalar_text(&self) -> Option<String> {
         match self {
-            Yaml::Str(s) | Yaml::Num(s) => Some(s.clone()),
+            Yaml::Str(s) => Some(s.clone()),
+            Yaml::Num(s) => Some(num_text(s)),
             _ => None,
         }
     }
@@ -123,6 +124,21 @@ pub fn num_value(raw: &str) -> Option<f64> {
         body.parse::<f64>().ok()?
     };
     Some(if neg { -v } else { v })
+}
+
+/// Lua `tostring()` of a YAML number as lyaml loads it: `0x1bb` → `443`, `1.50` → `1.5`,
+/// `+5` → `5`. Plain decimal integers keep their spelling.
+// upstream quirk: lyaml also turns `0123` into 83 and long digit strings into `1.2345e+16`
+// (it is a Lua number); those keep their original text here so passwords/ids survive.
+pub fn num_text(raw: &str) -> String {
+    let b = raw.strip_prefix('-').unwrap_or(raw);
+    if !b.is_empty() && b.bytes().all(|c| c.is_ascii_digit()) {
+        return raw.to_string();
+    }
+    match num_value(raw) {
+        Some(f) => crate::subscribe::links::lua_num(f),
+        None => raw.to_string(),
+    }
 }
 
 fn is_int(s: &str) -> bool {
@@ -1157,6 +1173,17 @@ proxy-groups:
         assert_eq!(px[0].get("port"), Some(&Yaml::Num("2".into())));
         assert_eq!(px[1].get("note"), Some(&s("line1\nline2\n")));
         assert_eq!(px[1].get("folded"), Some(&s("a b")));
+    }
+
+    #[test]
+    fn number_text_like_lua() {
+        assert_eq!(num_text("0x1bb"), "443");
+        assert_eq!(num_text("1.50"), "1.5");
+        assert_eq!(num_text("+5"), "5");
+        assert_eq!(num_text("1_000"), "1000");
+        assert_eq!(num_text("443"), "443");
+        assert_eq!(num_text("0123"), "0123");
+        assert_eq!(num_text("123456789012345678"), "123456789012345678");
     }
 
     #[test]

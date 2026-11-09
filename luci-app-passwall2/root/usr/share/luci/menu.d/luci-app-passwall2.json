@@ -186,5 +186,19 @@
 			"path": "passwall2/server_user_config"
 		},
 		"wildcard": true
+	},
+
+	"admin/services/passwall2/show": {
+		"action": {
+			"type": "view",
+			"path": "passwall2/menu_toggle"
+		}
+	},
+
+	"admin/services/passwall2/hide": {
+		"action": {
+			"type": "view",
+			"path": "passwall2/menu_toggle"
+		}
 	}
 }

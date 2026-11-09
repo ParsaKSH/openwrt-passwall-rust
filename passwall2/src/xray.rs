@@ -601,11 +601,13 @@ impl<'a> Gen<'a> {
                     "verifyPeerCertByName": g("tls_CertByName").unwrap_or_default(),
                     "echConfigList": if neq(node, "ech", "1") { g("ech_config") } else { None },
                     "certificates": match g("tls_certificate_pem") {
-                        // upstream crashes on a nil pem; treated as "no certificate"
-                        Some(pem) if neq(node, "tls_certificate", "1") && !pem.is_empty() => json!({
+                        // upstream crashes on a nil pem; treated as "no certificate".
+                        // upstream quirk: Lua emits a single object here, which Xray rejects
+                        // (`certificates` is []TLSCertConfig); we emit a one-element list.
+                        Some(pem) if neq(node, "tls_certificate", "1") && !pem.is_empty() => json!([{
                             "certificate": pem_lines(&pem),
                             "usage": "verify"
-                        }),
+                        }]),
                         _ => Value::Null,
                     },
                     "cipherSuites": nl(node, "cipherSuites").filter(|l| !l.is_empty()).map(|l| l.join(":")),
@@ -2468,9 +2470,12 @@ fn server_config(cfg_c: &Config, cfg_s: &Config, mut node: Node, effects: bool) 
             inbound["streamSettings"]["realitySettings"] = json!({
                 "show": false,
                 "dest": gs("reality_dest"),
-                "serverNames": raw(&node, "reality_serverNames").unwrap_or(json!([])),
+                // upstream quirk: Lua passes the stored value through (`or {}` / `or ""`), so an
+                // option-style string or an unset short id list gives a string, which Xray rejects
+                // ([]string). We always emit a list; unset short ids become [""] (empty short id).
+                "serverNames": nl(&node, "reality_serverNames").unwrap_or_default(),
                 "privateKey": gs("reality_private_key"),
-                "shortIds": raw(&node, "reality_shortId").unwrap_or(Value::from("")),
+                "shortIds": nl(&node, "reality_shortId").unwrap_or_else(|| vec![String::new()]),
                 "mldsa65Seed": if neq(&node, "use_mldsa65Seed", "1") { gs("reality_mldsa65Seed") } else { None },
                 "minClientVer": "1.0.0",
             });

@@ -9,6 +9,11 @@ if [ -e "/etc/config/ucitrack" ]; then
 EOF
 fi
 
+# A server started by the package this one replaces (e.g. upstream's Lua luci-app-passwall2
+# installed without opkg removing it first) would keep its ports, because the postinst only
+# runs "start" (which, like upstream, does not stop first). Stop it; the postinst restarts it.
+[ -x /usr/bin/passwall2 ] && /usr/bin/passwall2 server stop >/dev/null 2>&1
+
 rm -f /tmp/luci-indexcache /tmp/luci-indexcache.*
 rm -rf /tmp/luci-modulecache/
 killall -HUP rpcd 2>/dev/null

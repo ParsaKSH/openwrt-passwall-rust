@@ -192,7 +192,9 @@ return view.extend({
 	/* ------------------------------------------------------------ FAQ tab (global/faq.htm) */
 
 	renderFaq() {
-		const pageUrl = window.location.origin + pw.url();
+		/* upstream faq.htm: "Browser access" shows the controller's hide/show URLs (menu.d: passwall2/{hide,show}) */
+		const hideUrl = window.location.origin + pw.url('hide');
+		const showUrl = window.location.origin + pw.url('show');
 		const doHide = (ev) => {
 			ev.preventDefault();
 			return pw.confirm(_('Hide in main menu:'), _('Are you sure to hide?')).then((ok) => {
@@ -227,9 +229,9 @@ return view.extend({
 			]),
 			E('div', { 'id': 'faq_reset' }, [
 				E('a', { 'href': '#', 'class': 'pw-faq-reset', 'click': doHide }, [ _('Hide in main menu:') ]), E('br'),
-				' ' + _('Browser access:') + ' ', E('a', { 'href': pageUrl }, [ pageUrl ]), E('br'),
+				' ' + _('Browser access:') + ' ', E('a', { 'href': '#', 'click': doHide }, [ hideUrl ]), E('br'),
 				E('a', { 'href': '#', 'class': 'pw-faq-reset', 'click': doShow }, [ _('Show in main menu:') ]), E('br'),
-				' ' + _('Browser access:') + ' ', E('a', { 'href': pageUrl }, [ pageUrl ]), E('br')
+				' ' + _('Browser access:') + ' ', E('a', { 'href': showUrl }, [ showUrl ]), E('br')
 			])
 		]);
 	},

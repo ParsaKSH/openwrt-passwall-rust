@@ -99,15 +99,6 @@ struct Cursor {
     live: bool,
 }
 
-/// uci batch input is line based; keep values on one line.
-fn one_line(v: &str) -> String {
-    if v.contains(['\n', '\r']) {
-        v.replace(['\n', '\r'], " ")
-    } else {
-        v.to_string()
-    }
-}
-
 impl Cursor {
     fn load() -> Cursor {
         Cursor { cfg: Config::load(util::CONFIG), batch: Batch::new(), live: true }
@@ -140,7 +131,8 @@ impl Cursor {
             self.del_opt(id, opt);
             return;
         }
-        let v = one_line(value);
+        // multi-line values are fine: `uci batch` keeps newlines inside quotes (like libuci)
+        let v = value.to_string();
         let Some(path) = self.path(id, opt) else { return };
         if let Some(s) = self.sec_mut(id) {
             s.options.insert(opt.to_string(), uci::Value::Single(v.clone()));
@@ -154,7 +146,7 @@ impl Cursor {
             return;
         }
         let Some(path) = self.path(id, opt) else { return };
-        let vals: Vec<String> = values.iter().map(|v| one_line(v)).collect();
+        let vals: Vec<String> = values.to_vec();
         let existed = self.cfg.section(id).is_some_and(|s| s.has(opt));
         if let Some(s) = self.sec_mut(id) {
             s.options.insert(opt.to_string(), uci::Value::List(vals.clone()));

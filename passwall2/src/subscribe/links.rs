@@ -743,6 +743,9 @@ fn vmess(ctx: &ParseCtx, so: &SubOpts, content: &str, mut r: Node, log: Log) -> 
             for (k, v) in m.iter() {
                 if let Some(s) = jv_str(v) {
                     info.insert(k.clone(), s);
+                } else if k == "extra" && v.is_object() {
+                    // xhttp extra given as a JSON object instead of a JSON string
+                    info.insert(k.clone(), v.to_string());
                 }
             }
         }
@@ -847,8 +850,18 @@ fn vmess(ctx: &ParseCtx, so: &SubOpts, content: &str, mut r: Node, log: Log) -> 
             r.put("xhttp_host", host.clone());
             r.put("xhttp_path", path.clone());
             r.set("xhttp_mode", &g("mode").unwrap_or_else(|| "auto".into()));
-            r.put("xhttp_extra", g("extra"));
-            r.put("download_address", download_address(info.get("extra")).flatten());
+            // stored like the vless/ss parsers (base64 + use_xhttp_extra) so the generators
+            // can read it; upstream would have stored the raw JSON text.
+            let extra = ne(info.get("extra"));
+            r.put("use_xhttp_extra", extra.as_ref().map(|_| "1".to_string()));
+            r.put("xhttp_extra", extra.as_ref().map(|e| api::base64_encode(e.as_bytes())));
+            r.put(
+                "download_address",
+                download_address(extra.as_ref()).flatten().map(|a| {
+                    let a = a.strip_prefix('[').unwrap_or(&a);
+                    a.strip_suffix(']').unwrap_or(a).to_string()
+                }),
+            );
         }
         "httpupgrade" => {
             r.put("httpupgrade_host", host.clone());
@@ -1765,6 +1778,17 @@ mod tests {
         assert_eq!(s(&n, "mkcp_seed"), Some("s"));
         let n = parse(&ctx(), "vless://u@h.com:1?type=httpupgrade&host=a&path=%2Fu#n").unwrap();
         assert_eq!(s(&n, "httpupgrade_path"), Some("/u"));
+    }
+
+    #[test]
+    fn vmess_xhttp_extra() {
+        let j = r#"{"ps":"x","add":"a.com","port":"443","id":"u","net":"xhttp","path":"/x","mode":"packet-up","extra":{"downloadSettings":{"address":"[::9]"}}}"#;
+        let n = parse(&ctx(), &format!("vmess://{}", api::base64_encode(j.as_bytes()))).unwrap();
+        assert_eq!(s(&n, "transport"), Some("xhttp"));
+        assert_eq!(s(&n, "xhttp_mode"), Some("packet-up"));
+        assert_eq!(s(&n, "use_xhttp_extra"), Some("1"));
+        assert_eq!(api::base64_decode(s(&n, "xhttp_extra").unwrap()), r#"{"downloadSettings":{"address":"[::9]"}}"#);
+        assert_eq!(s(&n, "download_address"), Some("::9"));
     }
 
     #[test]

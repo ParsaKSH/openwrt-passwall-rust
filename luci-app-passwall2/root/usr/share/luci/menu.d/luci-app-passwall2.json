@@ -18,7 +18,10 @@
 		},
 		"depends": {
 			"acl": [ "luci-app-passwall2" ],
-			"uci": { "passwall2": { "@global": { "hide_from_luci": null } } }
+			"uci": [
+				{ "passwall2": { "@global": { "hide_from_luci": null } } },
+				{ "passwall2": { "@global": { "hide_from_luci": "0" } } }
+			]
 		}
 	},
 

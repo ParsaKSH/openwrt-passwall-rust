@@ -56,6 +56,7 @@ check_ipk() {
 		grep -q 'xray-core | sing-box' "$c" || bad "$f: core alternative"
 		[ "$(cat "$d/c/conffiles")" = "$(printf '%s\n' /etc/config/passwall2 /etc/config/passwall2_server /usr/share/passwall2/direct_ip /usr/share/passwall2/domains_excluded)" ] || bad "$f: conffiles"
 		grep -q 'rpcd reload' "$d/c/postinst-pkg" || bad "$f: postinst-pkg"
+		[ -x "$d/c/postrm" ] && grep -q 'passwall2-update' "$d/c/postrm" && sh -n "$d/c/postrm" || bad "$f: postrm"
 		local s
 		for s in "$d/r"/etc/init.d/* "$d/r"/etc/uci-defaults/* "$d/r"/etc/hotplug.d/*/* "$d/r/usr/libexec/rpcd/luci.passwall2"; do
 			sh -n "$s" || bad "$f: syntax error in ${s#$d/r}"
@@ -81,6 +82,7 @@ if [ "${#apks[@]}" -gt 0 ]; then
 			grep -q 'user: root' <<<"$out" || bad "$f: files not owned by root"
 			case "$f" in
 				*/noarch/*) grep -q 'luci-app-passwall2=' <<<"$out" || bad "$f: provides"
+					grep -q 'post-deinstall' <<<"$out" || bad "$f: no post-deinstall script"
 					grep -q 'arch: noarch' <<<"$out" || bad "$f: arch" ;;
 			esac
 			ok "$(basename "$(dirname "$f")")/$(basename "$f")"

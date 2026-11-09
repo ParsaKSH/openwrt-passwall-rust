@@ -300,10 +300,27 @@ function notify(msg, kind) {
 	return ui.addNotification(null, content, cls);
 }
 
+/* ui.showModal() puts a string title into an <h4> through innerHTML, so a string here is turned
+ * into a text node first: modal titles regularly carry node / server remarks and other data that
+ * came from subscriptions or share links. Pass a DOM node to get markup on purpose. */
+function textNode(v) {
+	if (v == null)
+		return v;
+	if (typeof(v) === 'object' && 'nodeType' in v)
+		return v;
+	if (Array.isArray(v))
+		return v.map(textNode);
+	return document.createTextNode(String(v));
+}
+
+function showModal(title, children, ...classes) {
+	return ui.showModal(textNode(title), children, ...classes);
+}
+
 function confirmDialog(title, msg) {
 	return new Promise((resolve) => {
 		const done = (v) => { ui.hideModal(); resolve(v); };
-		ui.showModal(title, [
+		showModal(title, [
 			E('div', { 'class': 'pw-root pw-modal' }, [
 				(msg != null && typeof(msg) === 'object' && 'nodeType' in msg) ? msg : E('p', {}, [ String(msg != null ? msg : '') ])
 			]),
@@ -318,7 +335,7 @@ function confirmDialog(title, msg) {
 
 function alertDialog(title, msg) {
 	return new Promise((resolve) => {
-		ui.showModal(title, [
+		showModal(title, [
 			E('div', { 'class': 'pw-root pw-modal' }, [
 				(msg != null && typeof(msg) === 'object' && 'nodeType' in msg) ? msg : E('p', {}, [ String(msg != null ? msg : '') ])
 			]),
@@ -351,12 +368,13 @@ function showLog(title, method, params) {
 		pre.textContent = t;
 		pre.scrollTop = pre.scrollHeight;
 	}).catch((e) => { pre.textContent = String(e && e.message || e); });
-	ui.showModal(title, [
+	/* Close comes first: LuCI's Escape handler clicks the first `.right > button`. */
+	showModal(title, [
 		E('div', { 'class': 'pw-root pw-modal pw-modal-log' }, [ pre ]),
 		E('div', { 'class': 'right' }, [
-			E('button', { 'class': 'btn cbi-button', 'click': () => reload() }, [ _('Refresh') ]),
+			E('button', { 'class': 'btn cbi-button', 'click': ui.hideModal }, [ _('Close') ]),
 			' ',
-			E('button', { 'class': 'btn cbi-button', 'click': ui.hideModal }, [ _('Close') ])
+			E('button', { 'class': 'btn cbi-button cbi-button-action', 'click': () => reload() }, [ _('Refresh') ])
 		])
 	], 'pw-log-modal');
 	return reload();
@@ -1673,6 +1691,8 @@ return baseclass.extend({
 	poll: poll,
 	unpoll: unpoll,
 	notify: notify,
+	textNode: textNode,
+	showModal: showModal,
 	confirm: confirmDialog,
 	alert: alertDialog,
 	showLog: showLog,

@@ -1579,15 +1579,45 @@ pub fn resolve_domain(domain: &str, dns: Option<&str>) -> Result<Vec<String>, Re
 /// `api.curl_base(url, file, args, gid)`: `curl <args> [-o file] '<url>'` → `(rc, output)`
 /// (stdout+stderr, trimmed). `args` are shell fragments (see [`CURL_ARGS`]).
 pub fn curl_base(url: &str, file: Option<&str>, args: &[String], gid: Option<u32>) -> (i32, String) {
+    let Some(cmd) = curl_cmd(url, file, args) else { return (3, String::new()) };
+    match gid {
+        Some(g) => exec_call_as_gid(&cmd, g),
+        None => exec_call(&cmd),
+    }
+}
+
+/// Shell command line of [`curl_base`]; None for a URL [`curl_url_ok`] refuses (reported as
+/// curl exit code 3, "URL malformed").
+///
+/// Hardening over upstream: the URL is single-quoted (upstream double-quotes it, so `$` and
+/// backticks expanded) and placed after `--`, so a value such as `-K/tmp/x` can never be read
+/// as a curl option; `--proto`/`--proto-redir` restrict the transfer (and redirects) to
+/// http/https, so `file://`, `scp://`, ... cannot be used to copy local files around as root.
+pub fn curl_cmd(url: &str, file: Option<&str>, args: &[String]) -> Option<String> {
+    if !curl_url_ok(url) {
+        return None;
+    }
     let mut a: Vec<String> = args.to_vec();
     if let Some(f) = file {
         a.push(format!("-o {}", util::shq(f)));
     }
-    // upstream double-quotes the url; single-quote it so `$`/backticks stay literal
-    let cmd = format!("curl {} {}", a.join(" "), util::shq(url));
-    match gid {
-        Some(g) => exec_call_as_gid(&cmd, g),
-        None => exec_call(&cmd),
+    a.push("--proto '=http,https' --proto-redir '=http,https'".into());
+    Some(format!("curl {} -- {}", a.join(" "), util::shq(url)))
+}
+
+/// URL acceptable for curl: non-empty, no leading `-`, no control characters (newlines), and
+/// an explicit scheme (if any) of `http`/`https` (case-insensitive). Scheme-less URLs are
+/// kept (curl defaults to http) like upstream.
+pub fn curl_url_ok(url: &str) -> bool {
+    if url.is_empty() || url.starts_with('-') || url.chars().any(|c| c.is_control()) {
+        return false;
+    }
+    match url.find("://") {
+        Some(i) => {
+            let scheme = url[..i].to_ascii_lowercase();
+            (scheme == "http" || scheme == "https") && url.len() > i + 3
+        }
+        None => true,
     }
 }
 
@@ -2530,11 +2560,20 @@ pub fn to_download(app: &str, url: &str, size: Option<&str>, task_id: Option<&st
             let _ = std::fs::remove_file(&f);
             f
         }
-        None => trim(&util::cmd_out("mktemp", &["-u", "-t", &format!("{}_download.XXXXXX", app)])),
+        None => trim(&util::cmd_out("mktemp", &["-u", "-p", "/tmp", &format!("{}_download.XXXXXX", app)])),
     };
     if let Some(sz) = size.and_then(lua_tonumber) {
         if sz > get_free_space("/tmp") as f64 {
             return err(translatef("%s not enough space.", &["/tmp"]));
+        }
+    }
+    // create the target ourselves (O_EXCL, 0600) so curl -o cannot be redirected through a
+    // symlink planted in the world-writable /tmp between the rm/mktemp -u and the download
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let created = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp_file).is_ok();
+        if !created || !is_own_tmp(&tmp_file, &format!("/tmp/{}_download.", app), false) {
+            return err(translatef("File download failed or timed out: %s", &[url]));
         }
     }
     let mut args = curl_args();
@@ -2573,6 +2612,24 @@ fn total_json(t: f64) -> Value {
     if t.fract() == 0.0 && t.abs() < 9.0e15 { json!(t as i64) } else { json!(t) }
 }
 
+/// `path` is `<prefix><id>` (id = `[A-Za-z0-9_-]+`, as made by `to_download`/`mktemp`), is
+/// not a symlink, is a regular file (`dir` false) or a directory (`dir` true), and is owned by
+/// our effective uid (so another local user cannot plant it in the world-writable /tmp).
+pub fn is_own_tmp(path: &str, prefix: &str, dir: bool) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    extern "C" {
+        fn geteuid() -> u32;
+    }
+    let Some(id) = path.strip_prefix(prefix) else { return false };
+    if !valid_task_id(id) {
+        return false;
+    }
+    let Ok(m) = std::fs::symlink_metadata(path) else { return false };
+    let kind_ok = if dir { m.file_type().is_dir() } else { m.file_type().is_file() };
+    // SAFETY: geteuid(2) has no preconditions and cannot fail.
+    kind_ok && m.uid() == unsafe { geteuid() }
+}
+
 /// `api.to_extract(app, file, subfix)`: extract the downloaded archive into
 /// `/tmp/<app>_extract.XXXXXX` → `{code:0, file:<dir>}`.
 pub fn to_extract(app: &str, file: &str) -> Value {
@@ -2580,7 +2637,9 @@ pub fn to_extract(app: &str, file: &str) -> Value {
     if let Err(e) = check_path(app) {
         return e;
     }
-    if file.is_empty() || !util::exists(file) {
+    // upstream accepts any path here and `rm -f`s it afterwards; only the archive that
+    // `to_download` stored for this component may be extracted (and removed)
+    if file.is_empty() || !is_own_tmp(file, &format!("/tmp/{}_download.", app), false) {
         return err(translate("File path required."));
     }
     let mut tool: Option<&str> = None;
@@ -2604,7 +2663,11 @@ pub fn to_extract(app: &str, file: &str) -> Value {
     if free == 0 || free <= new_size {
         return err(translatef("%s not enough space.", &["/tmp"]));
     }
-    let tmp_dir = trim(&util::cmd_out("mktemp", &["-d", "-t", &format!("{}_extract.XXXXXX", app)]));
+    let tmp_dir = trim(&util::cmd_out("mktemp", &["-d", "-p", "/tmp", &format!("{}_extract.XXXXXX", app)]));
+    if !is_own_tmp(&tmp_dir, &format!("/tmp/{}_extract.", app), true) {
+        let _ = std::fs::remove_file(file);
+        return err(translatef("%s not enough space.", &["/tmp"]));
+    }
     match tool {
         Some("unzip") => {
             let bin = which("unzip").unwrap_or_else(|| "unzip".into());
@@ -2631,11 +2694,16 @@ pub fn to_move(app: &str, file: &str) -> Value {
     };
     let mut bin_path = file.to_string();
     let mut rm_tmp = format!("/bin/rm -rf /tmp/{}_download.*", app);
-    if !file.is_empty() && std::fs::metadata(file).map(|m| m.is_dir()).unwrap_or(false) {
+    // upstream runs and then moves any caller-chosen path over the binary; accept only what
+    // to_download (`/tmp/<app>_download.<id>`) / to_extract (`/tmp/<app>_extract.XXXXXX/`)
+    // created for this component
+    let is_dir = is_own_tmp(file, &format!("/tmp/{}_extract.", app), true);
+    if is_dir {
         bin_path = format!("{}/{}", file, c.name.to_lowercase());
         rm_tmp = format!("/bin/rm -rf /tmp/{}_extract.*", app);
     }
-    if file.is_empty() {
+    let bin_ok = std::fs::symlink_metadata(&bin_path).map(|m| m.file_type().is_file()).unwrap_or(false);
+    if file.is_empty() || !bin_ok || (!is_dir && !is_own_tmp(file, &format!("/tmp/{}_download.", app), false)) {
         util::sh_ok(&rm_tmp);
         return err(translate("Client file is required."));
     }
@@ -3435,5 +3503,51 @@ mod tests {
         assert_eq!(lmo_canon_hash("  Hello   world \n"), lmo_canon_hash("Hello world"));
         assert_ne!(lmo_canon_hash("a"), lmo_canon_hash("b"));
         assert_eq!(sfh_hash(b"", 0), 0);
+    }
+
+    #[test]
+    fn curl_url_hardening() {
+        assert!(curl_url_ok("https://example.com/sub?a=1"));
+        assert!(curl_url_ok("HTTP://example.com"));
+        assert!(curl_url_ok("example.com/sub"));
+        assert!(!curl_url_ok(""));
+        assert!(!curl_url_ok("-K/tmp/c"));
+        assert!(!curl_url_ok("--config=/tmp/c"));
+        assert!(!curl_url_ok("file:///etc/shadow"));
+        assert!(!curl_url_ok("scp://h/x"));
+        assert!(!curl_url_ok("https://"));
+        assert!(!curl_url_ok("http://a/1\nurl=http://b"));
+        let c = curl_cmd("https://a/b'c", Some("/tmp/x"), &["-skL".to_string()]).unwrap();
+        assert!(c.ends_with(" -- 'https://a/b'\\''c'"), "{}", c);
+        assert!(c.contains("--proto '=http,https' --proto-redir '=http,https'"));
+        assert!(c.starts_with("curl -skL -o '/tmp/x' "));
+        assert!(curl_cmd("-K/tmp/c", None, &[]).is_none());
+        assert_eq!(curl_base("-K/tmp/c", None, &[], None), (3, String::new()));
+    }
+
+    #[test]
+    fn own_tmp_paths() {
+        let id = format!("t{}", std::process::id());
+        let f = format!("/tmp/pwtestcom_download.{}", id);
+        let d = format!("/tmp/pwtestcom_extract.{}", id);
+        let l = format!("/tmp/pwtestcom_download.{}l", id);
+        let _ = std::fs::remove_file(&f);
+        let _ = std::fs::remove_file(&l);
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::write(&f, "x").unwrap();
+        std::fs::create_dir(&d).unwrap();
+        std::os::unix::fs::symlink("/etc/hostname", &l).unwrap();
+        assert!(is_own_tmp(&f, "/tmp/pwtestcom_download.", false));
+        assert!(!is_own_tmp(&f, "/tmp/pwtestcom_download.", true));
+        assert!(is_own_tmp(&d, "/tmp/pwtestcom_extract.", true));
+        assert!(!is_own_tmp(&d, "/tmp/pwtestcom_extract.", false));
+        // symlinks, other prefixes, traversal and arbitrary files are refused
+        assert!(!is_own_tmp(&l, "/tmp/pwtestcom_download.", false));
+        assert!(!is_own_tmp("/etc/config/network", "/tmp/pwtestcom_download.", false));
+        assert!(!is_own_tmp(&format!("/tmp/pwtestcom_download.{}/../../etc/passwd", id), "/tmp/pwtestcom_download.", false));
+        assert!(!is_own_tmp("/tmp/pwtestcom_download.", "/tmp/pwtestcom_download.", false));
+        let _ = std::fs::remove_file(&f);
+        let _ = std::fs::remove_file(&l);
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

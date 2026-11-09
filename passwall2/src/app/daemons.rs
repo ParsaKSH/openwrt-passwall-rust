@@ -21,6 +21,11 @@ pub fn monitor() -> i32 {
     }
     sleep_s(58);
     loop {
+        // Reap cores that died (and earlier respawns' shells): the Child handles from
+        // spawn_shell are dropped, so without this every exited child stays a zombie of this
+        // never-exiting daemon. Safe: this process is single-threaded and its own
+        // `Command::output()` calls wait for their child synchronously.
+        util::reap_children();
         if util::exists(&lock_file) {
             sleep_s(6);
             continue;
@@ -71,6 +76,8 @@ pub fn tasks() -> i32 {
     let me = self_bin();
     let mut t: i64 = 0;
     loop {
+        // reap the restart / rule-update / subscribe jobs started in earlier rounds
+        util::reap_children();
         if t != 0 {
             let cfg = Config::load(util::CONFIG);
             if cfg.s("@global_delay[0]", "restart_week_mode") == "8" && interval_due(t, &cfg.s("@global_delay[0]", "restart_interval_mode")) {

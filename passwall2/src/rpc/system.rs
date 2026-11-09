@@ -246,11 +246,25 @@ fn stored_url(section: &str) -> String {
     }
 }
 
+/// A subscription URL as stored by `subscribe_manual*`: an `http(s)://` (or scheme-less) URL
+/// or a local path, never something curl could parse as an option (`-K/tmp/x`) or with control
+/// characters (see [`api::curl_url_ok`]).
+pub fn valid_sub_url(url: &str) -> bool {
+    api::curl_url_ok(url)
+}
+
+fn sub_bad_url() -> Value {
+    json!({"success": false, "msg": "Invalid subscription URL."})
+}
+
 pub fn subscribe_manual(p: &Params) -> Value {
     let section = p.s("section");
     let url = p.s("url");
     if section.is_empty() || url.is_empty() {
         return sub_missing();
+    }
+    if !valid_sub_url(&url) {
+        return sub_bad_url();
     }
     let uci_url = stored_url(&section);
     if uci_url.is_empty() {
@@ -271,6 +285,9 @@ pub fn subscribe_manual_all(p: &Params) -> Value {
     }
     let section_list = split_keep_empty(&sections);
     let url_list = split_keep_empty(&urls);
+    if url_list.iter().any(|u| !u.is_empty() && !valid_sub_url(u)) {
+        return sub_bad_url();
+    }
     if section_list.iter().any(|s| stored_url(s).is_empty()) {
         return sub_unsaved();
     }
@@ -414,6 +431,77 @@ fn pw_log(msg: &str) {
     api::log(0, &format!(" * PassWall2 {}", api::translate(msg)));
 }
 
+/// Archive member name without a leading `./` or `/` (busybox/GNU tar strip `/` on create).
+fn member_name(n: &str) -> &str {
+    let mut n = n.trim_end_matches(['\r', '\n']);
+    loop {
+        if let Some(r) = n.strip_prefix("./") {
+            n = r;
+        } else if let Some(r) = n.strip_prefix('/') {
+            n = r;
+        } else {
+            return n;
+        }
+    }
+}
+
+/// Members a backup may contain: the three [`BACKUP_FILES`] and directory entries (`.../`)
+/// of their parents. `names` = `tar -tzf`, `verbose` = `tar -tvzf` (symlinks and hard links
+/// are refused: they could make the restore copy, or tar write, files outside the archive).
+pub fn backup_members_ok(names: &str, verbose: &str) -> bool {
+    let files: Vec<&str> = BACKUP_FILES.iter().map(|f| member_name(f)).collect();
+    let mut any = false;
+    for raw in names.lines() {
+        let n = member_name(raw);
+        if n.is_empty() || n == "." {
+            continue;
+        }
+        if files.contains(&n) {
+            any = true;
+            continue;
+        }
+        let is_parent_dir = n.ends_with('/') && files.iter().any(|f| f.starts_with(n));
+        if !is_parent_dir {
+            return false;
+        }
+    }
+    let links = verbose.lines().any(|l| l.starts_with('l') || l.starts_with('h') || l.contains(" -> ") || l.contains(" link to "));
+    any && !links
+}
+
+/// Contents of the extracted `<root>/<rel>`: every component must be a real directory (no
+/// symlink), the file a regular file with a single link, opened with O_NOFOLLOW.
+pub fn read_extracted(root: &str, rel: &str) -> Option<Vec<u8>> {
+    use std::io::Read;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let rel = member_name(rel);
+    let parts: Vec<&str> = rel.split('/').collect();
+    if parts.iter().any(|p| p.is_empty() || *p == "." || *p == "..") {
+        return None;
+    }
+    let mut path = std::path::PathBuf::from(root);
+    for (i, part) in parts.iter().enumerate() {
+        path.push(part);
+        let m = std::fs::symlink_metadata(&path).ok()?;
+        let last = i + 1 == parts.len();
+        if (!last && !m.file_type().is_dir()) || (last && (!m.file_type().is_file() || m.nlink() != 1)) {
+            return None;
+        }
+    }
+    // Linux O_NOFOLLOW (arm/arm64/powerpc use their own value, the rest asm-generic's)
+    #[cfg(any(target_arch = "arm", target_arch = "aarch64", target_arch = "powerpc", target_arch = "powerpc64"))]
+    const O_NOFOLLOW: i32 = 0o100000;
+    #[cfg(not(any(target_arch = "arm", target_arch = "aarch64", target_arch = "powerpc", target_arch = "powerpc64")))]
+    const O_NOFOLLOW: i32 = 0o400000;
+    let mut f = std::fs::OpenOptions::new().read(true).custom_flags(O_NOFOLLOW).open(&path).ok()?;
+    if !f.metadata().ok()?.file_type().is_file() {
+        return None;
+    }
+    let mut data = vec![];
+    f.read_to_end(&mut data).ok()?;
+    Some(data)
+}
+
 /// `restore_backup {filename, chunk, chunk_index, total_chunks}` (also accepts `file_name`).
 pub fn restore_backup(p: &Params) -> Value {
     let filename = p.get("filename").or_else(|| p.get("file_name"));
@@ -427,40 +515,114 @@ pub fn restore_backup(p: &Params) -> Value {
     crate::uci::revert(C);
     let _ = std::fs::write(util::LOG_FILE, "\n");
     pw_log("Configuration file uploaded successfully…");
-    let temp_dir = "/tmp/passwall2_bak";
-    util::mkdir(temp_dir);
-    let result = if util::cmd_ok("tar", &["-xzf", &file_path, "-C", temp_dir]) {
-        for f in BACKUP_FILES {
-            let t = format!("{}{}", temp_dir, f);
-            if util::exists(&t) {
-                util::cmd_ok("cp", &["-f", &t, f]);
-            }
-        }
-        pw_log("Configuration restored successfully…");
-        pw_log("Service restarting…");
-        for init in ["/etc/init.d/passwall2", "/etc/init.d/passwall2_server"] {
-            util::spawn_bg(init, &["restart".to_string()], "/dev/null");
-        }
-        json!({"status": "success", "message": "Upload completed", "path": file_path})
-    } else {
-        pw_log("Configuration file decompression failed, please try again!");
-        json!({"status": "error", "message": "Decompression failed"})
-    };
-    util::rm_rf(temp_dir);
+    let result = restore_archive(&file_path);
     let _ = std::fs::remove_file(&file_path);
-    result
+    match result {
+        Ok(()) => {
+            pw_log("Configuration restored successfully…");
+            pw_log("Service restarting…");
+            for init in ["/etc/init.d/passwall2", "/etc/init.d/passwall2_server"] {
+                util::spawn_bg(init, &["restart".to_string()], "/dev/null");
+            }
+            json!({"status": "success", "message": "Upload completed", "path": file_path})
+        }
+        Err(()) => {
+            pw_log("Configuration file decompression failed, please try again!");
+            json!({"status": "error", "message": "Decompression failed"})
+        }
+    }
 }
 
+/// Validate and extract the uploaded archive into a fresh private directory, then install
+/// the regular files among [`BACKUP_FILES`] it contains. Upstream extracts into the fixed
+/// `/tmp/passwall2_bak` and `cp -f`s the members, which follows symlinks/hard links planted
+/// in the archive (reading e.g. /etc/shadow into a LuCI-readable file).
+fn restore_archive(file_path: &str) -> Result<(), ()> {
+    let names = util::cmd_out("tar", &["-tzf", file_path]);
+    let verbose = util::cmd_out("tar", &["-tvzf", file_path]);
+    if !backup_members_ok(&names, &verbose) {
+        return Err(());
+    }
+    // mktemp -d: new directory, mode 0700, owned by us
+    let temp_dir = api::trim(&util::cmd_out("mktemp", &["-d", "-p", "/tmp", "passwall2_bak.XXXXXX"]));
+    if !temp_dir.starts_with("/tmp/passwall2_bak.") || !std::fs::symlink_metadata(&temp_dir).map(|m| m.is_dir()).unwrap_or(false) {
+        return Err(());
+    }
+    let ok = util::cmd_ok("tar", &["-xzf", file_path, "-C", &temp_dir]);
+    let mut contents = vec![];
+    if ok {
+        for f in BACKUP_FILES {
+            if let Some(data) = read_extracted(&temp_dir, f) {
+                contents.push((f, data));
+            }
+        }
+    }
+    util::rm_rf(&temp_dir);
+    if !ok || contents.is_empty() {
+        return Err(());
+    }
+    for (f, data) in contents {
+        let _ = std::fs::write(f, data);
+    }
+    Ok(())
+}
+
+/// Seconds `reset_config` waits for the service stop before answering (LuCI's rpc timeout
+/// is 20 s; rpcd kills a plugin that runs past its exec timeout).
+const RESET_WAIT_SECS: u64 = 15;
+
 /// `reset_config`: revert, clear log, stop, restore `0_default_config`.
+///
+/// The stop (which may block on the service lock while a restart waits up to 600 s for a
+/// subscription/rule update) and the copy of the default config run together in a detached
+/// child, so the reset completes even when the stop outlives this rpcd call; we wait for it
+/// up to [`RESET_WAIT_SECS`] so the usual case still answers after the config was reset.
 pub fn reset_config() -> Value {
     crate::uci::revert(C);
     let _ = std::fs::write(util::LOG_FILE, "\n");
-    util::cmd_ok("/etc/init.d/passwall2", &["stop"]);
     let def = format!("{}/0_default_config", util::APP_PATH);
-    if util::exists(&def) {
-        util::cmd_ok("cp", &["-f", &def, &format!("{}/passwall2", crate::uci::conf_dir())]);
+    let dst = format!("{}/passwall2", crate::uci::conf_dir());
+    let script = "/etc/init.d/passwall2 stop >/dev/null 2>&1; [ -f \"$1\" ] && cp -f \"$1\" \"$2\"";
+    let child = spawn_detached("/bin/sh", &["-c", script, "sh", &def, &dst]);
+    let done = match child {
+        Some(mut c) => {
+            let mut done = false;
+            for _ in 0..RESET_WAIT_SECS * 10 {
+                if let Ok(Some(_)) = c.try_wait() {
+                    done = true;
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            done
+        }
+        None => false,
+    };
+    if done {
+        json!({"redirect": ""})
+    } else {
+        json!({"redirect": "", "pending": true})
     }
-    json!({"redirect": ""})
+}
+
+/// Start `prog args` in its own session with stdio on /dev/null (it outlives us if needed and
+/// never holds rpcd's stdout pipe open).
+fn spawn_detached(prog: &str, args: &[&str]) -> Option<std::process::Child> {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    extern "C" {
+        fn setsid() -> i32;
+    }
+    let mut cmd = Command::new(prog);
+    cmd.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    // SAFETY: setsid(2) is async-signal-safe and only detaches the child from our session.
+    unsafe {
+        cmd.pre_exec(|| {
+            setsid();
+            Ok(())
+        });
+    }
+    cmd.spawn().ok()
 }
 
 fn purge_luci_cache() {
@@ -647,6 +809,51 @@ mod tests {
     fn subscribe_validation() {
         assert_eq!(subscribe_manual(&Params::from_json(r#"{"section":"s"}"#)), sub_missing());
         assert_eq!(subscribe_manual_all(&Params::from_json(r#"{"sections":"a"}"#)), sub_missing());
+        // option-like / multi-line URLs are refused before anything is stored
+        assert_eq!(subscribe_manual(&Params::from_json(r#"{"section":"s","url":"-K/tmp/c"}"#)), sub_bad_url());
+        assert_eq!(subscribe_manual(&Params::from_json(r#"{"section":"s","url":"https://a\nb"}"#)), sub_bad_url());
+        assert_eq!(subscribe_manual_all(&Params::from_json(r#"{"sections":"a,b","urls":"https://ok,-K/tmp/c"}"#)), sub_bad_url());
+        assert!(valid_sub_url("https://example.com/sub"));
+        assert!(valid_sub_url("/tmp/local_sub.txt"));
+        assert!(!valid_sub_url("file:///etc/shadow"));
+    }
+
+    #[test]
+    fn backup_members() {
+        let ok = "etc/config/passwall2\netc/config/passwall2_server\nusr/share/passwall2/domains_excluded\n";
+        let v = "-rw-r--r-- root/root 10 2026-01-01 00:00:00 etc/config/passwall2\n";
+        assert!(backup_members_ok(ok, v));
+        assert!(backup_members_ok("./etc/\n./etc/config/\n./etc/config/passwall2\n", v));
+        assert!(backup_members_ok("/etc/config/passwall2\n", v));
+        // unknown members, traversal, a symlinked directory and empty archives are refused
+        assert!(!backup_members_ok("etc/config/passwall2\netc/crontabs/root\n", v));
+        assert!(!backup_members_ok("etc/config/passwall2\n../../etc/x\n", v));
+        assert!(!backup_members_ok("etc/config\netc/config/passwall2\n", v));
+        assert!(!backup_members_ok("", ""));
+        assert!(!backup_members_ok("etc/\n", "drwxr-xr-x root/root 0 2026-01-01 00:00:00 etc/\n"));
+        // symlink / hard link members (busybox and GNU tar -tv formats)
+        assert!(!backup_members_ok(ok, "lrwxrwxrwx root/root 0 2026-01-01 00:00:00 usr/share/passwall2/domains_excluded -> /etc/shadow\n"));
+        assert!(!backup_members_ok(ok, "hrw-r--r-- root/root 0 2026-01-01 00:00 etc/config/passwall2 link to etc/shadow\n"));
+        assert!(!backup_members_ok(ok, "-rw-r--r-- root/root 0 2026-01-01 00:00:00 etc/config/passwall2 -> etc/shadow\n"));
+    }
+
+    #[test]
+    fn extracted_files() {
+        let d = tmpdir("extract");
+        std::fs::create_dir_all(format!("{}/etc/config", d)).unwrap();
+        std::fs::create_dir_all(format!("{}/usr/share", d)).unwrap();
+        std::fs::write(format!("{}/etc/config/passwall2", d), "cfg").unwrap();
+        std::os::unix::fs::symlink("/etc/hostname", format!("{}/etc/config/passwall2_server", d)).unwrap();
+        std::os::unix::fs::symlink("/etc", format!("{}/usr/share/passwall2", d)).unwrap();
+        assert_eq!(read_extracted(&d, "/etc/config/passwall2").as_deref(), Some(&b"cfg"[..]));
+        assert_eq!(read_extracted(&d, "/etc/config/passwall2_server"), None);
+        assert_eq!(read_extracted(&d, "/usr/share/passwall2/hostname"), None);
+        assert_eq!(read_extracted(&d, "/etc/../etc/config/passwall2"), None);
+        // hard link (nlink 2) is refused
+        std::fs::hard_link(format!("{}/etc/config/passwall2", d), format!("{}/etc/hl", d)).unwrap();
+        assert_eq!(read_extracted(&d, "/etc/config/passwall2"), None);
+        assert_eq!(read_extracted(&d, "/etc/missing"), None);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

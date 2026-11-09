@@ -539,7 +539,6 @@ return view.extend({
 	},
 
 	rowTop: function(tr) {
-		this.gen++;
 		this.tbody.insertBefore(tr, this.tbody.firstChild);
 		this.setOrderFromDom();
 	},
@@ -894,21 +893,48 @@ return view.extend({
 		});
 	},
 
+	/* Cancel every queued (not yet started) latency test: runQueue() stops at the next item.
+	 * Only for actions that are about to talk to the router / leave the page, so their
+	 * request is not stuck behind a long test queue. */
+	stopTests: function() {
+		this.gen++;
+	},
+
 	testAll: function(kind) {
 		var self = this;
 		var cls = kind == 'icmp' ? 'pw-ping' : (kind == 'tcping' ? 'pw-tcping' : 'pw-urltest');
+		var run = this.testRun = (this.testRun || 0) + 1;
 		var items = [];
 		this.rows().forEach(function(tr) {
 			if (tr.classList.contains('pw-row-hidden')) return;
 			var td = tr.querySelector('td.' + cls);
-			if (!td || !td.querySelector('a')) return;
+			if (!td || td.dataset.busy == '1') return;
+			/* a cell still waiting in an earlier, cancelled run is taken over (it has no link now) */
+			var waiting = td.dataset.queued != null;
+			if (!waiting && !td.querySelector('a')) return;
+			if (!waiting)
+				td._pwOrig = Array.prototype.slice.call(td.childNodes);
+			td.dataset.queued = String(run);
 			items.push({ id: tr.getAttribute('data-id'), td: td });
 			dom.content(td, E('span', {}, ['…']));
 		});
 		this.gen++;
+		var mine = function(it) { return it.td.dataset.queued == String(run); };
+		var release = function(it) { delete it.td.dataset.queued; delete it.td._pwOrig; };
 		return this.runQueue(items, kind == 'urltest' ? URLTEST_WORKERS : PING_WORKERS, function(it) {
-			it.td.dataset.busy = '0';
+			if (!mine(it)) return;
+			release(it);
 			return self.testOne(it.id, kind, it.td);
+		}).then(function() {
+			/* the queue was cancelled (stopTests / another run / re-render): put back what the
+			 * untouched cells showed before, so they can be clicked or tested again */
+			items.forEach(function(it) {
+				if (!mine(it)) return;
+				var orig = it.td._pwOrig;
+				release(it);
+				if (it.td.isConnected)
+					dom.content(it.td, orig && orig.length ? orig : E('a', { 'click': function() { self.testOne(it.id, kind, it.td); } }, [_('Test')]));
+			});
 		});
 	},
 
@@ -947,10 +973,10 @@ return view.extend({
 
 	handleDelete: function(id) {
 		var self = this;
-		this.gen++;
 		var n = this.byId[id] || {};
 		return pw.confirm(_('Delete'), _('Are you sure to delete select nodes?') + ' (' + (n.remarks || id) + ')').then(function(ok) {
 			if (!ok) return;
+			self.stopTests();
 			processing();
 			return pw.call('delete_select_nodes', { ids: id }).then(function() { self.reload(); }, function(e) {
 				ui.hideModal();
@@ -961,7 +987,6 @@ return view.extend({
 
 	handleDeleteSelected: function() {
 		var self = this;
-		this.gen++;
 		var ids = this.visibleSelectedIds();
 		if (!ids.length) {
 			ui.addNotification(null, E('p', {}, [_('You no select nodes !')]), 'warning');
@@ -969,6 +994,7 @@ return view.extend({
 		}
 		return pw.confirm(_('Delete select nodes'), _('Are you sure to delete select nodes?')).then(function(ok) {
 			if (!ok) return;
+			self.stopTests();
 			processing();
 			return pw.call('delete_select_nodes', { ids: ids.join(',') }).then(function() { self.reload(); }, function(e) {
 				ui.hideModal();
@@ -979,9 +1005,9 @@ return view.extend({
 
 	handleClearAll: function() {
 		var self = this;
-		this.gen++;
 		return pw.confirm(_('Clear all nodes'), _('Are you sure to clear all nodes?')).then(function(ok) {
 			if (!ok) return;
+			self.stopTests();
 			processing();
 			return pw.call('clear_all_nodes', {}).then(function() { self.reload(); }, function(e) {
 				ui.hideModal();
@@ -1013,14 +1039,13 @@ return view.extend({
 
 	handleReassign: function() {
 		var self = this;
-		this.gen++;
 		var ids = this.visibleSelectedIds();
 		if (!ids.length) {
 			ui.addNotification(null, E('p', {}, [_('You no select nodes !')]), 'warning');
 			return;
 		}
 		var gp = this.groupPicker();
-		ui.showModal(_('Reassign Node Group'), [
+		pw.showModal(_('Reassign Node Group'), [
 			E('div', { 'class': 'pw-root pw-modal' }, [
 				E('p', {}, [_('Nodes') + ': ' + ids.length]),
 				E('label', {}, [_('Group Name')]), gp.el
@@ -1029,6 +1054,7 @@ return view.extend({
 				E('button', { 'class': 'btn cbi-button', 'click': ui.hideModal }, [_('Close')]), ' ',
 				E('button', { 'class': 'btn cbi-button-action important', 'click': function() {
 					var g = gp.get();
+					self.stopTests();
 					processing();
 					pw.call('reassign_group', { group: g, ids: ids.join(',') }).then(function() { self.reload(); }, function(e) {
 						ui.hideModal();
@@ -1041,11 +1067,10 @@ return view.extend({
 
 	handleAddLink: function() {
 		var self = this;
-		this.gen++;
 		var ta = E('textarea', { 'id': 'nodes_link', 'class': 'cbi-input-textarea', 'rows': 10,
 			'style': 'width:100%;font-family:monospace;white-space:pre', 'wrap': 'off' });
 		var gp = this.groupPicker();
-		ui.showModal(_('Add the node via the link'), [
+		pw.showModal(_('Add the node via the link'), [
 			E('div', { 'class': 'pw-root pw-modal' }, [
 				ta,
 				E('p', { 'style': 'color:red' }, [_('Enter share links, one per line. Subscription links are not supported!')]),
@@ -1074,6 +1099,7 @@ return view.extend({
 	/* ajax_add_node(): 1000 character chunks, posted sequentially */
 	addLinks: function(link, group) {
 		var self = this;
+		this.stopTests();
 		processing();
 		var chunks = [];
 		for (var i = 0; i < link.length; i += CHUNK) chunks.push(link.substring(i, i + CHUNK));
@@ -1093,7 +1119,6 @@ return view.extend({
 	/* "Use" dialog (set_node_div) */
 	handleUse: function(id) {
 		var self = this;
-		this.gen++;
 		var n = this.byId[id] || {};
 		var gnode = uci.get_first(CONF, 'global', 'node');
 		var gsec = gnode ? uci.get(CONF, gnode) : null;
@@ -1101,6 +1126,7 @@ return view.extend({
 		var set = function(type, config) {
 			return pw.confirm(_('Use'), _('Are you sure set this node?')).then(function(ok) {
 				if (!ok) return;
+				self.stopTests();
 				processing();
 				return pw.call('set_node', { type: type, config: config, section: id }).then(function() {
 					window.location.href = pw.url('log');
@@ -1120,7 +1146,7 @@ return view.extend({
 		} else {
 			buttons.push(E('button', { 'class': 'btn cbi-button cbi-button-apply', 'click': function() { set('@global[0]', 'node'); } }, [_('Node')]));
 		}
-		ui.showModal(_('You choose node is:') + ' ' + (n.remarks || id), [
+		pw.showModal(_('You choose node is:') + ' ' + (n.remarks || id), [
 			E('div', { 'class': 'pw-root pw-modal', 'style': 'display:flex;flex-wrap:wrap;gap:.5em' }, buttons),
 			E('div', { 'class': 'right' }, [E('button', { 'class': 'btn cbi-button', 'click': ui.hideModal }, [_('Close')])])
 		]);
@@ -1146,7 +1172,7 @@ return view.extend({
 		var holder = E('div', { 'style': 'display:flex;justify-content:center' });
 		try { holder.innerHTML = sl.qrSVG(url, 240); } catch (e) { holder.textContent = String(e.message || e); }
 		var status = E('span');
-		ui.showModal(n.remarks || id, [
+		pw.showModal(n.remarks || id, [
 			E('div', { 'class': 'pw-root pw-modal', 'style': 'display:flex;flex-direction:column;gap:.75em;align-items:stretch' }, [
 				holder,
 				E('textarea', { 'class': 'cbi-input-textarea', 'readonly': '', 'rows': 4, 'style': 'width:100%;font-family:monospace;word-break:break-all' }, [url]),

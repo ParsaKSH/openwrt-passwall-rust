@@ -55,8 +55,8 @@ function header(title, desc) {
 	}
 	catch (e) {}
 	return E('div', { 'class': 'pw-page-header' }, [
-		E('h2', {}, title),
-		desc ? E('div', { 'class': 'cbi-map-descr' }, desc) : ''
+		E('h2', {}, [ title ]),
+		desc ? E('div', { 'class': 'cbi-map-descr' }, [ desc ]) : ''
 	]);
 }
 
@@ -181,7 +181,7 @@ return view.extend({
 					textarea.value = '';
 					textarea.scrollTop = textarea.scrollHeight;
 				}).catch(function(e) {
-					ui.addNotification(null, E('p', {}, _('Error') + ': ' + (e && e.message ? e.message : e)), 'danger');
+					ui.addNotification(null, E('p', {}, [ _('Error') + ': ' + (e && e.message ? e.message : e) ]), 'danger');
 				});
 			})
 		}, _('Clear logs'));
@@ -198,7 +198,7 @@ return view.extend({
 		});
 
 		var select = E('select', { 'class': 'cbi-input-select', 'id': 'pw-log-source' },
-			sources.map(function(s) { return E('option', { 'value': s.key }, s.label); }));
+			sources.map(function(s) { return E('option', { 'value': s.key }, [ s.label ]); }));
 
 		function setText(text) {
 			var wasBottom = (textarea.scrollTop + textarea.clientHeight >= textarea.scrollHeight - 10);

@@ -36,8 +36,8 @@ function header(title, desc) {
 	}
 	catch (e) {}
 	return E('div', { 'class': 'pw-page-header' }, [
-		E('h2', {}, title),
-		desc ? E('div', { 'class': 'cbi-map-descr' }, desc) : ''
+		E('h2', {}, [ title ]),
+		desc ? E('div', { 'class': 'cbi-map-descr' }, [ desc ]) : ''
 	]);
 }
 

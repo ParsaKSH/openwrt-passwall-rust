@@ -144,6 +144,52 @@ pub static METHODS: &[Method] = &[
     m!("get_singbox_tags"),
 ];
 
+/// Methods that change state (UCI, files, services, downloads/installs). The rpcd ACL
+/// (`/usr/share/rpcd/acl.d/luci-app-passwall2.json`) grants them only in its `write` section;
+/// every other method (and alias) is non-mutating and listed under `read`. The plugin runs as
+/// root and writes UCI itself, so this ACL split is the only thing keeping read-only LuCI users
+/// from them (a unit test keeps the ACL file in sync with this list).
+pub static WRITE_METHODS: &[&str] = &[
+    "clear_log",
+    "server_update_config",
+    "server_clear_log",
+    "link_add_node",
+    "socks_autoswitch_add_node",
+    "socks_autoswitch_remove_node",
+    "update_config",
+    "add_node",
+    "set_node",
+    "copy_node",
+    "clear_all_nodes",
+    "delete_select_nodes",
+    "reassign_group",
+    "save_node_list_opt",
+    "update_rules",
+    "rollback_rules",
+    "add_shunt_rule",
+    "delete_select_shunt_rules",
+    "flush_set",
+    "subscribe_del_node",
+    "subscribe_del_all",
+    "subscribe_manual",
+    "subscribe_manual_all",
+    "com_update",
+    "restore_backup",
+    "reset_config",
+    "show",
+    "hide",
+    "show_menu",
+    "hide_menu",
+    "set_auto_lang",
+    "reorder_sections",
+];
+
+/// true if `method` (or the generic method of an alias) changes state; see [`WRITE_METHODS`].
+pub fn is_write_method(method: &str) -> bool {
+    let generic = com_alias(method).map(|(g, _)| g).unwrap_or(method);
+    WRITE_METHODS.contains(&generic)
+}
+
 /// Upstream per-component route aliases → (generic method, com).
 fn com_alias(method: &str) -> Option<(&'static str, String)> {
     for (pfx, generic) in [("check_", "com_check"), ("update_", "com_update"), ("version_", "com_version")] {
@@ -335,7 +381,6 @@ extern "C" {
 }
 
 /// `passwall2 rpc <list|call <method>|job <id>>`
-
 pub fn cli(args: &[String]) -> i32 {
     // rpcd runs plugins with umask 077; upstream's controller ran under uhttpd (022). Files and
     // services created from here (rules, service restarts, dnsmasq confs read by the dnsmasq
@@ -423,6 +468,39 @@ mod tests {
         assert_eq!(com_alias("check_passwall2"), Some(("com_check", "passwall2".to_string())));
         assert_eq!(com_alias("version_passwall2"), None);
         assert_eq!(com_alias("clear_log"), None);
+    }
+
+    #[test]
+    fn acl_split_matches_methods() {
+        let acl: Value = serde_json::from_str(include_str!("../../luci-app-passwall2/root/usr/share/rpcd/acl.d/luci-app-passwall2.json")).unwrap();
+        let app = &acl["luci-app-passwall2"];
+        let names = |sec: &str| -> Vec<String> {
+            app[sec]["ubus"]["luci.passwall2"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect()
+        };
+        let read = names("read");
+        let write = names("write");
+        // explicit names only (no wildcard can widen the read grant)
+        for n in read.iter().chain(write.iter()) {
+            assert!(!n.contains(['*', '?', '[']), "wildcard in ACL: {}", n);
+        }
+        for w in WRITE_METHODS {
+            assert!(has_method(w), "unknown write method {}", w);
+        }
+        let all = list_json();
+        for name in all.as_object().unwrap().keys() {
+            let (in_r, in_w) = (read.contains(name), write.contains(name));
+            if is_write_method(name) {
+                assert!(in_w && !in_r, "{} must be in write only", name);
+            } else {
+                assert!(in_r && !in_w, "{} must be in read only", name);
+            }
+        }
+        for n in read.iter().chain(write.iter()) {
+            assert!(all.get(n).is_some(), "ACL lists unknown method {}", n);
+        }
+        assert!(is_write_method("update_xray") && is_write_method("update_passwall2"));
+        assert!(!is_write_method("check_xray") && !is_write_method("version_sing-box"));
+        assert!(!is_write_method("index_status") && is_write_method("update_config"));
     }
 
     #[test]

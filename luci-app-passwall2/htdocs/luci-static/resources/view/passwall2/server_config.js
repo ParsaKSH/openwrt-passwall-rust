@@ -48,8 +48,8 @@ function header(title, desc) {
 	}
 	catch (e) {}
 	return E('div', { 'class': 'pw-page-header' }, [
-		E('h2', {}, title),
-		desc ? E('div', { 'class': 'cbi-map-descr' }, desc) : ''
+		E('h2', {}, [ title ]),
+		desc ? E('div', { 'class': 'cbi-map-descr' }, [ desc ]) : ''
 	]);
 }
 
@@ -1515,7 +1515,7 @@ return view.extend({
 				return true;
 			ui.addNotification(null, [
 				E('p', {}, _("Can't find this file!")),
-				E('ul', {}, bad.map(function(b) { return E('li', {}, b); }))
+				E('ul', {}, bad.map(function(b) { return E('li', {}, [ b ]); }))
 			], 'danger');
 			return false;
 		});

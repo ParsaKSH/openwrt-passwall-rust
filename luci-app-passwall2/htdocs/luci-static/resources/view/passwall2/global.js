@@ -117,7 +117,7 @@ return view.extend({
 		];
 
 		const grid = E('div', { 'class': 'pw-status-grid' }, [
-			mkTile('core', 'cpu', 'Core', _('NOT RUNNING'), 'err', false)
+			mkTile('core', 'cpu', _('Core'), _('NOT RUNNING'), 'err', false)
 		].concat(sites.map((s) => {
 			const el = mkTile(s[0], s[0] === 'github' ? 'link' : 'globe', s[1], _('Touch Check'), 'err', true);
 			el.addEventListener('click', () => checkConnect(s[0], s[2]));
@@ -336,15 +336,15 @@ return view.extend({
 						if (resp && resp.status === 'success') {
 							current++;
 							const pct = Math.floor((current / totalChunks) * 100);
-							uploadBtn.textContent = 'Uploading... ' + pct + '%';
+							uploadBtn.textContent = _('Uploading...') + ' ' + pct + '%';
 							progress.firstChild.style.width = pct + '%';
 							return sendNext();
 						}
 						resetBtn();
-						pw.alert(_('Restore Backup File'), 'Upload error: ' + ((resp && resp.message) || ''));
+						pw.alert(_('Restore Backup File'), _('Upload error:') + ' ' + ((resp && resp.message) || ''));
 					}).catch((err) => {
 						resetBtn();
-						pw.alert(_('Restore Backup File'), 'Upload failed with status ' + ((err && err.message) || err));
+						pw.alert(_('Restore Backup File'), _('Upload failed with status') + ' ' + ((err && err.message) || err));
 					});
 				};
 				sendNext();
@@ -754,8 +754,12 @@ return view.extend({
 		));
 	},
 
+	/* Register the "land on Runtime Logs" redirect only once the save succeeded: a rejected
+	 * save (validation error) must not leave the listener behind for a later, unrelated apply. */
 	handleSaveApply(ev, mode) {
-		pw.redirectAfterApply(pw.url('log'));
-		return this.super('handleSaveApply', [ ev, mode ]);
+		return this.handleSave(ev).then(() => {
+			pw.redirectAfterApply(pw.url('log'));
+			return ui.changes.apply(mode == '0');
+		});
 	}
 });

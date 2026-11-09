@@ -115,6 +115,20 @@ fn uci_cmd() -> Command {
     c
 }
 
+/// The id libuci gives an anonymous section (`uci_fixup_section` in list.c):
+/// `cfg%02x%04x` of the package's section counter and `djbhash(type) % 65536`. The hash is
+/// taken when the section is allocated, before any option exists, so it covers the type only.
+/// (`str[i]` is a plain `char`: for non-ASCII types the result depends on the target's char
+/// signedness — `load` asks uci in that case; here bytes are treated as signed, like x86/MIPS.)
+pub fn libuci_anon_name(counter: usize, stype: &str) -> String {
+    let mut h: u32 = 5381;
+    for &b in stype.as_bytes() {
+        h = (h << 5).wrapping_add(h).wrapping_add(b as i8 as i32 as u32);
+    }
+    let h = h & 0x7FFF_FFFF;
+    format!("cfg{:02x}{:04x}", counter, h % (1 << 16))
+}
+
 impl Config {
     /// Load a config. Missing file => empty config.
     pub fn load(name: &str) -> Config {
@@ -125,7 +139,12 @@ impl Config {
             if let Ok(out) = uci_cmd().args(["-q", "export", name]).output() {
                 if out.status.success() {
                     let mut cfg = Self::parse(name, &String::from_utf8_lossy(&out.stdout));
-                    cfg.fix_anonymous_names();
+                    // Anonymous names are assigned when libuci parses the *committed* file and
+                    // then survive the delta replay (which may add/remove sections), so they
+                    // cannot be derived from the merged export: ask uci.
+                    if cfg.sections.iter().any(|s| s.anonymous) {
+                        cfg.fix_anonymous_names();
+                    }
                     return cfg;
                 }
             }
@@ -133,12 +152,16 @@ impl Config {
         let path = format!("{}/{}", conf_dir(), name);
         let text = std::fs::read_to_string(&path).unwrap_or_default();
         let mut cfg = Self::parse(name, &text);
-        cfg.fix_anonymous_names();
+        // `parse` already reproduces libuci's anonymous names; only a non-ASCII section type
+        // (whose hash depends on the target's char signedness) needs uci itself.
+        if cfg.sections.iter().any(|s| s.anonymous && !s.stype.is_ascii()) {
+            cfg.fix_anonymous_names();
+        }
         cfg
     }
 
-    /// Replace our synthetic anonymous ids with the real ones libuci assigns
-    /// (as shown by `uci show`), so ids match what LuCI/ubus use.
+    /// Replace the anonymous ids with the ones `uci -X show` reports (forks `uci`; only
+    /// needed when the native naming in [`Config::parse`] cannot be trusted).
     pub fn fix_anonymous_names(&mut self) {
         if !self.sections.iter().any(|s| s.anonymous) {
             return;
@@ -167,10 +190,12 @@ impl Config {
 
     pub fn parse(name: &str, text: &str) -> Config {
         let mut cfg = Config { name: name.to_string(), sections: vec![] };
-        let mut anon_counter = 0usize;
+        // libuci's per-package section counter: bumped for every *newly allocated* section
+        // (a repeated `config <type> '<name>'` reopens the existing one and does not count).
+        let mut alloc_counter = 0usize;
+        let mut named_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut type_count: IndexMap<String, usize> = IndexMap::new();
         for toks in tokenize_stmts(text) {
-            let toks = toks;
             if toks.is_empty() {
                 continue;
             }
@@ -179,14 +204,15 @@ impl Config {
                 "config" => {
                     let stype = toks.get(1).cloned().unwrap_or_default();
                     let (sname, anon) = match toks.get(2) {
-                        Some(n) if !n.is_empty() => (n.clone(), false),
+                        Some(n) if !n.is_empty() => {
+                            if named_seen.insert(n.clone()) {
+                                alloc_counter += 1;
+                            }
+                            (n.clone(), false)
+                        }
                         _ => {
-                            // uci names anonymous sections cfgXXXXXX (hash based); we
-                            // use a stable deterministic pattern. Writers always go
-                            // through `@type[idx]`, so the exact id does not matter
-                            // unless a delta-aware `uci export` gave us real names.
-                            anon_counter += 1;
-                            (format!("cfg{:02x}{:04x}", anon_counter & 0xff, anon_counter), true)
+                            alloc_counter += 1;
+                            (libuci_anon_name(alloc_counter, &stype), true)
                         }
                     };
                     let idx = type_count.entry(stype.clone()).or_insert(0);
@@ -214,8 +240,6 @@ impl Config {
                 _ => {}
             }
         }
-        // If uci export produced real anonymous names they are already set; else
-        // try to fetch them via `uci show` so ids match what LuCI uses.
         cfg
     }
 
@@ -488,5 +512,26 @@ mod tests {
         let m = Config::parse("p", "config shunt_rules 'r'\n\toption domain_list 'a.com\nb.com\n'\n\toption x '1' # c\n");
         assert_eq!(m.s("r", "domain_list"), "a.com\nb.com\n");
         assert_eq!(m.s("r", "x"), "1");
+    }
+
+    #[test]
+    fn anonymous_names_match_libuci() {
+        // expected ids taken from `uci -X show` on OpenWrt 24.10 / 25.12
+        let t = "config global\n\toption enabled '0'\n\nconfig nodes 'myshunt'\n\toption remarks 'x'\n\nconfig global_delay\n\toption start_daemon '1'\n\nconfig global_rules\n\tlist x 'q'\n\nconfig acl_rule\n\toption remarks 'a'\n\nconfig acl_rule\n";
+        let c = Config::parse("t1", t);
+        let names: Vec<&str> = c.sections.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["cfg013fd6", "myshunt", "cfg032924", "cfg0446c0", "cfg0530ec", "cfg0630ec"]);
+        assert!(c.sections[0].anonymous && !c.sections[1].anonymous);
+        // a reopened named section does not consume a counter value; `config c ''` is anonymous
+        let c = Config::parse("t4", "config a 'x'\n\nconfig b\n\nconfig a 'x'\n\nconfig c\n\nconfig c ''\n\nconfig d\n");
+        let anon: Vec<&str> = c.sections.iter().filter(|s| s.anonymous).map(|s| s.name.as_str()).collect();
+        assert_eq!(anon, ["cfg02b607", "cfg03b608", "cfg04b608", "cfg05b609"]);
+        // counter above 0xff widens (printf %02x), no wrap
+        assert_eq!(libuci_anon_name(1, "sub"), "cfg01ab8f");
+        assert_eq!(libuci_anon_name(0x100, "sub"), "cfg100ab8f");
+        assert_eq!(libuci_anon_name(0x12c, "sub"), "cfg12cab8f");
+        assert_eq!(libuci_anon_name(1, "dnsmasq"), "cfg01411c");
+        assert_eq!(libuci_anon_name(10, "global_singbox"), "cfg0a5c2f");
+        assert_eq!(c.section("cfg05b609").map(|s| s.stype.as_str()), Some("d"));
     }
 }

@@ -92,6 +92,9 @@ pub fn url_test_node(node_id: &str) -> String {
             }
         }
     }
+    // release the port reserved by get_new_port (like socks_switch's test_node); otherwise
+    // every URL test leaks one `get_port_<n>` entry until the range 48900-49151 runs out
+    util::del_cache_var(&format!("get_port_{}", port));
     if result.is_empty() {
         // curl printed nothing (could not run): upstream echoes an empty line
         return String::new();

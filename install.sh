@@ -9,12 +9,16 @@
 #   2. downloads the matching passwall2-rs + luci-app-passwall2-rs packages from GitHub releases
 #   3. makes sure the dependencies (xray-core/sing-box, geoview, tcping, chinadns-ng, ...) can be
 #      found, adding the Openwrt-Passwall "passwall_packages" feed when they are missing
-#   4. removes the original luci-app-passwall2 (+ its translation packages) if installed,
-#      KEEPING /etc/config/passwall2, /etc/config/passwall2_server and the direct/excluded lists
+#   4. checks that every dependency can be satisfied, then replaces the original
+#      luci-app-passwall2 (+ its translation packages) if installed, KEEPING /etc/config/passwall2,
+#      /etc/config/passwall2_server and the direct/excluded lists. On apk the switch is one
+#      transaction; on opkg a copy of the original package is kept and reinstalled if the
+#      installation fails.
 #   5. installs the packages and the recommended extras, then restarts the service
 #
 # Options:
 #   --version TAG       install release TAG (e.g. v26.11.0) instead of the latest one
+#                       (an older release downgrades the installed one)
 #   --mirror PREFIX     prefix GitHub URLs with PREFIX (e.g. https://gh-proxy.org/)
 #   --minimal           only install the packages and their hard dependencies
 #   --no-feed           never add the Openwrt-Passwall packages feed
@@ -23,7 +27,8 @@
 #   --uninstall         remove passwall2-rs (configuration is kept)
 #   -h, --help          this help
 #
-# Environment: PW2_REPO (default ParsaKSH/openwrt-passwall-rust), PW2_TMP (download dir),
+# Environment: PW2_REPO (default ParsaKSH/openwrt-passwall-rust), PW2_TMP (parent of the private
+#              download dir, default /tmp; only the passwall2-rs-install.* dir inside it is deleted),
 #              PW2_BASE_URL (download packages from this URL instead of GitHub releases).
 
 set -u
@@ -36,11 +41,19 @@ ADD_FEED=1
 DNSMASQ_FULL=1
 FORCE=0
 UNINSTALL=0
-TMPD="${PW2_TMP:-/tmp/passwall2-rs-install.$$}"
-BACKUP="$TMPD/backup"
+TMPD=""   # private work dir, created by make_tmpdir (never a user-supplied path: it is rm -rf'd)
+BACKUP=""
 FEED_BASE="https://master.dl.sourceforge.net/project/openwrt-passwall-build"
 KEEP_FILES="/etc/config/passwall2 /etc/config/passwall2_server /usr/share/passwall2/direct_ip /usr/share/passwall2/domains_excluded"
 UPSTREAM_PKGS="luci-app-passwall2 luci-i18n-passwall2-fa luci-i18n-passwall2-ru luci-i18n-passwall2-zh-cn luci-i18n-passwall2-zh-tw"
+# runtime state written by the backend's self-update (owned by no package)
+UPDATE_STATUS_DIR="/www/luci-static/resources/passwall2-update"
+# rollback state (see rollback())
+REMOVE=""             # original packages that are being replaced
+UPSTREAM_REMOVED=0    # opkg: they were removed
+WORLD_SAVED=0         # apk: /etc/apk/world was edited, the original copy is $TMPD/world
+SERVICE_STOPPED=0
+BIN_WAS_INSTALLED=0
 
 # Architectures published as release assets (keep in sync with packaging/arches.txt "core"+"extra").
 SUPPORTED_ARCHES="x86_64 aarch64_generic aarch64_cortex-a53 aarch64_cortex-a72 aarch64_cortex-a76
@@ -58,10 +71,50 @@ info() { printf "${C_I}==>${C_N} %s\n" "$*"; }
 ok() { printf "${C_O}==>${C_N} %s\n" "$*"; }
 warn() { printf "${C_W}WARN:${C_N} %s\n" "$*" >&2; }
 die() {
+	trap - INT TERM HUP
 	printf "${C_E}ERROR:${C_N} %s\n" "$*" >&2
+	rollback
 	restore_backup 2>/dev/null
-	rm -rf "$TMPD"
+	[ -n "$TMPD" ] && rm -rf "$TMPD"
 	exit 1
+}
+
+# Undo a failed switch from the original package (called by die()). Functions used here are
+# defined further down; they are only reached once the state flags are set, i.e. after that.
+rollback() {
+	local p f missing
+	[ "$WORLD_SAVED$UPSTREAM_REMOVED$SERVICE_STOPPED" = 000 ] && return 0
+	# the new packages are in place: nothing to undo
+	pkg_installed_exact luci-app-passwall2-rs && return 0
+	if [ "$WORLD_SAVED" = 1 ]; then
+		# apk: the switch is a single transaction, so a failure left the installed set alone
+		warn "restoring /etc/apk/world"
+		cp -p "$TMPD/world" /etc/apk/world
+		missing=""
+		for p in $REMOVE; do pkg_installed_exact "$p" || missing="$missing $p"; done
+		# shellcheck disable=SC2086
+		[ -z "$missing" ] || apk add $missing >/dev/null 2>&1 ||
+			warn "could not reinstall${missing}; run: apk add${missing}"
+	fi
+	if [ "$UPSTREAM_REMOVED" = 1 ]; then
+		warn "reinstalling the original package:${REMOVE}"
+		if [ "$BIN_WAS_INSTALLED" = 0 ] && pkg_installed_exact passwall2-rs; then
+			opkg remove passwall2-rs >/dev/null 2>&1
+		fi
+		set --
+		for p in $REMOVE; do
+			for f in "$TMPD/upstream/${p}_"*.ipk; do [ -f "$f" ] && set -- "$@" "$f"; done
+		done
+		# shellcheck disable=SC2086
+		{ [ $# -gt 0 ] && opkg install "$@" >/dev/null 2>&1; } || opkg install $REMOVE >/dev/null 2>&1 ||
+			warn "could not reinstall${REMOVE}; run: opkg install${REMOVE}"
+		restore_backup 2>/dev/null
+	fi
+	if [ "$SERVICE_STOPPED" = 1 ] && [ -x /etc/init.d/passwall2 ] &&
+		[ "$(uci -q get passwall2.@global[0].enabled)" = 1 ]; then
+		/etc/init.d/passwall2 restart >/dev/null 2>&1
+	fi
+	return 0
 }
 
 usage() { sed -n '2,/^$/s/^# \{0,1\}//p' "$0" 2>/dev/null || echo "see https://github.com/$REPO"; }
@@ -108,6 +161,23 @@ case "$ARCH" in
 	*) CORE_ALL=0 ;;
 esac
 
+# PW2_TMP is only the parent: the script works in (and deletes) a fresh directory of its own.
+make_tmpdir() {
+	local parent="${PW2_TMP:-/tmp}"
+	parent="${parent%/}"
+	[ -n "$parent" ] || parent=/
+	[ -d "$parent" ] || mkdir -p "$parent" || die "cannot create $parent"
+	TMPD="$(mktemp -d "$parent/passwall2-rs-install.XXXXXX" 2>/dev/null)" || TMPD=""
+	if [ -z "$TMPD" ] || [ ! -d "$TMPD" ]; then
+		# no mktemp: mkdir without -p fails instead of reusing an existing directory
+		TMPD="$parent/passwall2-rs-install.$$"
+		mkdir "$TMPD" || { TMPD=""; die "cannot create a temporary directory in $parent"; }
+	fi
+	BACKUP="$TMPD/backup"
+}
+make_tmpdir
+trap 'die "interrupted"' INT TERM HUP
+
 # ------------------------------------------------------------------ helpers
 fetch() { # fetch URL FILE   (file:///dir/... = offline install from a local directory)
 	case "$1" in
@@ -132,7 +202,7 @@ pkg_installed() {
 # luci-app-passwall2-rs provides luci-app-passwall2)
 pkg_installed_exact() {
 	if [ "$PM" = apk ]; then
-		[ -f "/lib/apk/packages/$1.list" ]
+		[ -f "/lib/apk/packages/$1.list" ] || [ -n "$(pkg_version "$1")" ]
 	else
 		[ -f "/usr/lib/opkg/info/$1.control" ]
 	fi
@@ -144,6 +214,73 @@ pkg_available() {
 	else
 		[ -n "$(opkg list "$1" 2>/dev/null | awk -v p="$1" '$1 == p')" ]
 	fi
+}
+
+# installed version of an exact package name (empty if not installed)
+pkg_version() {
+	if [ "$PM" = apk ]; then
+		apk info -e -v "$1" 2>/dev/null | sed -n "s/^$1-\([0-9].*\)/\1/p" | head -n 1
+	else
+		sed -n 's/^Version: *//p' "/usr/lib/opkg/info/$1.control" 2>/dev/null | head -n 1
+	fi
+}
+
+# control file of an ipk (outer tar.gz with ./control.tar.gz, as made by ipkg-build)
+ipk_control() {
+	tar -xzOf "$1" ./control.tar.gz 2>/dev/null | tar -xzOf - ./control 2>/dev/null
+}
+ipk_depends() { ipk_control "$1" | sed -n 's/^Depends: *//p'; }
+
+# print the dependency groups of the given ipks that no installed or available package satisfies
+# (alternatives "a | b" are satisfied by either; version constraints are not checked)
+missing_ipk_depends() {
+	local f
+	for f in "$@"; do ipk_depends "$f"; echo; done | tr ',' '\n' | sed 's/([^)]*)//g; s/|/ /g' |
+		while read -r alts; do
+			[ -n "$alts" ] || continue
+			found=0
+			for a in $alts; do
+				case "$a" in passwall2-rs) found=1; break ;; esac # shipped next to it
+				if pkg_installed "$a" || pkg_available "$a"; then found=1; break; fi
+			done
+			[ "$found" = 1 ] || echo "$alts" | sed 's/ / | /g'
+		done
+}
+
+# rebuild an installed opkg package from its database entry so that it can be reinstalled
+# offline (the feeds may be unreachable once the original proxy is gone)
+repack_ipk() { # repack_ipk NAME OUTDIR
+	local p="$1" out="$2" info=/usr/lib/opkg/info d s f
+	d="$TMPD/repack.$p"
+	[ -f "$info/$p.control" ] && [ -f "$info/$p.list" ] || return 1
+	rm -rf "$d"
+	mkdir -p "$d/control" "$out" || return 1
+	grep -v '^Status:\|^Installed-Time:\|^Auto-Installed:' "$info/$p.control" >"$d/control/control"
+	for s in conffiles preinst postinst prerm postrm postinst-pkg prerm-pkg; do
+		[ -f "$info/$p.$s" ] && cp -p "$info/$p.$s" "$d/control/$s"
+	done
+	# list entries are files and symlinks (opkg may append a tab and the mode); skip deleted ones
+	while IFS= read -r f; do
+		f="${f%%	*}"
+		[ -L "$f" ] || { [ -e "$f" ] && [ ! -d "$f" ]; } || continue
+		echo ".$f"
+	done <"$info/$p.list" >"$d/files"
+	(cd / && tar -czf "$d/data.tar.gz" -T "$d/files") || return 1
+	(cd "$d/control" && tar -czf ../control.tar.gz ./*) || return 1
+	echo "2.0" >"$d/debian-binary"
+	(cd "$d" && tar -czf "$out/${p}_repack.ipk" ./debian-binary ./data.tar.gz ./control.tar.gz) || return 1
+	rm -rf "$d"
+}
+
+# keep installable copies of the packages that are about to be removed
+save_upstream() {
+	local p
+	mkdir -p "$TMPD/upstream"
+	for p in "$@"; do
+		repack_ipk "$p" "$TMPD/upstream" && continue
+		(cd "$TMPD/upstream" && opkg download "$p" >/dev/null 2>&1) && continue
+		warn "could not keep a copy of $p; if the installation fails it is reinstalled from the feeds"
+	done
 }
 
 pm_update() {
@@ -220,6 +357,7 @@ if [ "$UNINSTALL" = 1 ]; then
 	restore_backup
 	rm -f /tmp/luci-indexcache /tmp/luci-indexcache.* 2>/dev/null
 	rm -rf /tmp/luci-modulecache
+	rm -rf "$UPDATE_STATUS_DIR"
 	/etc/init.d/rpcd restart >/dev/null 2>&1
 	rm -rf "$TMPD"
 	ok "passwall2-rs removed; /etc/config/passwall2 kept"
@@ -232,9 +370,6 @@ case " $(echo $SUPPORTED_ARCHES) " in
 	*" $ARCH "*) ;;
 	*) die "no prebuilt package for $ARCH. Build it with the OpenWrt SDK: see https://github.com/$REPO#building" ;;
 esac
-
-rm -rf "$TMPD"
-mkdir -p "$TMPD" || die "cannot create $TMPD"
 
 if [ -n "${PW2_BASE_URL:-}" ]; then
 	BASE="$PW2_BASE_URL"
@@ -270,7 +405,7 @@ fi
 pm_update
 
 need_feed=0
-for p in geoview tcping; do pkg_available "$p" || need_feed=1; done
+for p in geoview tcping; do pkg_installed "$p" || pkg_available "$p" || need_feed=1; done
 if [ "$need_feed" = 1 ]; then
 	if [ "$ADD_FEED" = 1 ]; then
 		case "$RELEASE" in
@@ -303,20 +438,8 @@ if [ "$need_feed" = 1 ]; then
 	fi
 fi
 
-# ------------------------------------------------------------------ remove the original package
+# user files a package removal/installation below may drop (restored by restore_backup)
 backup_configs
-for p in $UPSTREAM_PKGS; do
-	if pkg_installed_exact "$p"; then
-		REMOVE="${REMOVE:-} $p"
-	fi
-done
-if [ -n "${REMOVE:-}" ]; then
-	info "removing original:${REMOVE} (configuration is kept)"
-	[ -x /etc/init.d/passwall2 ] && /etc/init.d/passwall2 stop >/dev/null 2>&1
-	# shellcheck disable=SC2086
-	pm_remove $REMOVE || die "could not remove${REMOVE}"
-	restore_backup
-fi
 
 # ------------------------------------------------------------------ dnsmasq-full (needed for nftset/ipset DNS rules)
 if [ "$MINIMAL" = 0 ] && [ "$DNSMASQ_FULL" = 1 ] && ! pkg_installed dnsmasq-full && pkg_installed dnsmasq; then
@@ -373,17 +496,80 @@ if [ "$MINIMAL" = 0 ]; then
 	done
 fi
 
-# ------------------------------------------------------------------ install
-info "installing passwall2-rs $NEW_VERSION"
+# ------------------------------------------------------------------ replace the original package and install
+# Nothing is removed before it is known that the new packages can be installed, and a failure
+# puts the original package back (see rollback()).
+for p in $UPSTREAM_PKGS; do
+	pkg_installed_exact "$p" && REMOVE="$REMOVE $p"
+done
+pkg_installed_exact passwall2-rs && BIN_WAS_INSTALLED=1
+OLD_VERSION="$(pkg_version luci-app-passwall2-rs)"
+
+stop_upstream() {
+	[ -n "$REMOVE" ] && [ -x /etc/init.d/passwall2 ] || return 0
+	/etc/init.d/passwall2 stop >/dev/null 2>&1
+	SERVICE_STOPPED=1
+}
+
+info "installing passwall2-rs $NEW_VERSION${OLD_VERSION:+ (installed: $OLD_VERSION)}"
 if [ "$PM" = apk ]; then
 	set -- --allow-untrusted
 	[ "$FORCE" = 1 ] && set -- "$@" --force-reinstall
-	apk add "$@" "$TMPD/$BIN_FILE" "$TMPD/$LUCI_FILE" || die "installation failed"
+	set -- "$@" "$TMPD/$BIN_FILE" "$TMPD/$LUCI_FILE"
+	if [ -n "$REMOVE" ]; then
+		info "replacing original:${REMOVE} (configuration is kept)"
+		# One solver run: drop the original packages from world and add ours. A separate
+		# `apk del` would also purge every dependency only they pulled in (geoview, tcping,
+		# geodata with the updated rules, ...) and our install would have to download them again.
+		# The proxy cores the original package pulled in are kept explicitly: our apk package
+		# cannot depend on "xray-core | sing-box".
+		for p in xray-core sing-box; do pkg_installed_exact "$p" && set -- "$@" "$p"; done
+		cp -p /etc/apk/world "$TMPD/world" || die "cannot back up /etc/apk/world"
+		WORLD_SAVED=1
+		awk -v rm=" $REMOVE " '{ n = $0; sub(/[<>=~].*/, "", n) } index(rm, " " n " ") == 0' \
+			"$TMPD/world" >"$TMPD/world.new" && cat "$TMPD/world.new" >/etc/apk/world ||
+			die "cannot update /etc/apk/world"
+	fi
+	apk add --simulate "$@" >"$TMPD/simulate.log" 2>&1 || {
+		grep -v '^WARNING' "$TMPD/simulate.log" >&2
+		die "the packages cannot be installed (see above); nothing was changed"
+	}
+	stop_upstream
+	apk add "$@" || die "installation failed"
 else
+	for f in "$BIN_FILE" "$LUCI_FILE"; do
+		ipk_control "$TMPD/$f" | grep -q '^Package: ' || die "$f is not a readable package; nothing was changed"
+	done
+	missing="$(missing_ipk_depends "$TMPD/$BIN_FILE" "$TMPD/$LUCI_FILE" | tr '\n' ',' | sed 's/,$//; s/,/, /g')"
+	[ -z "$missing" ] || die "not installed and not available in the configured feeds: $missing." \
+		"Nothing was changed. Run 'opkg update' and check the passwall_packages feed in /etc/opkg/customfeeds.conf"
+	if [ -n "$REMOVE" ]; then
+		info "replacing original:${REMOVE} (configuration is kept)"
+		# shellcheck disable=SC2086
+		save_upstream $REMOVE
+		stop_upstream
+		UPSTREAM_REMOVED=1
+		# one package per call, translations first: opkg refuses to remove luci-app-passwall2
+		# while a package that depends on it is still installed, even in the same command
+		for p in $(echo $REMOVE | tr ' ' '\n' | sort -r); do
+			opkg remove "$p" || die "could not remove $p"
+		done
+		restore_backup
+	fi
 	set --
 	[ "$FORCE" = 1 ] && set -- --force-reinstall
+	# --version TAG may be older than what is installed: opkg skips downgrades unless told
+	if [ -n "$OLD_VERSION" ] && opkg compare-versions "$OLD_VERSION" '>>' "$NEW_VERSION" 2>/dev/null; then
+		info "downgrading from $OLD_VERSION"
+		set -- "$@" --force-downgrade
+	fi
 	opkg install "$@" "$TMPD/$BIN_FILE" "$TMPD/$LUCI_FILE" || die "installation failed"
 fi
+for p in passwall2-rs luci-app-passwall2-rs; do
+	v="$(pkg_version "$p")"
+	[ "$v" = "$NEW_VERSION" ] || die "$p is at version ${v:-<not installed>} after installing $NEW_VERSION"
+done
+trap - INT TERM HUP
 restore_backup
 [ -s /etc/config/passwall2 ] || cp -f /usr/share/passwall2/0_default_config /etc/config/passwall2
 

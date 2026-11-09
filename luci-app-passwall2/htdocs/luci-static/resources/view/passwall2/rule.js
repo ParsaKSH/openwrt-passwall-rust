@@ -149,10 +149,6 @@ const RuleUpdateValue = form.DummyValue.extend({
 
 /* ---------------------------------------------------------------- shunt rule list */
 
-function escapeHTML(s) {
-	return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-}
-
 /*
  * Apply a new in-group order to UCI (staged; persisted by Save / Save & Apply).
  * upstream quirk: rule.lua calls uci:reorder(name, idx-1) with absolute positions, which also moves the
@@ -208,7 +204,7 @@ function renderShuntRuleList() {
 			'class': 'btn cbi-button',
 			'group_name': g,
 			'click': () => showGroup(g)
-		}, [escapeHTML(label) + ' | ', E('span', { 'style': 'color:red' }, [String(list.length)])]);
+		}, [label + ' | ', E('span', { 'style': 'color:red' }, [String(list.length)])]);
 		tabBar.appendChild(tabBtns[g]);
 
 		const tbody = E('tbody', {});

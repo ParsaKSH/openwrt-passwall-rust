@@ -266,9 +266,14 @@ pub fn rm_rf(p: &str) {
 fn var_file() -> String {
     format!("{}/var", TMP_PATH)
 }
-/// `get_cache_var KEY`
-pub fn get_cache_var(key: &str) -> Option<String> {
-    let text = read(&var_file());
+/// Lock serializing every read-modify-write of the var file across processes. It lives in
+/// LOCK_PATH (not next to the var file) so an `rm -rf $TMP_PATH` cannot unlink a held lock.
+fn var_lock_file() -> String {
+    format!("{}/passwall2_var.lock", LOCK_PATH)
+}
+
+/// Value of `KEY="VALUE"` in var-file text (last definition wins).
+fn var_lookup(text: &str, key: &str) -> Option<String> {
     let pfx = format!("{}=", key);
     let line = text.lines().rev().find(|l| l.starts_with(&pfx))?;
     let rest = &line[pfx.len()..];
@@ -276,35 +281,85 @@ pub fn get_cache_var(key: &str) -> Option<String> {
     let v = v.split('"').next().unwrap_or("");
     Some(v.to_string())
 }
-/// `del_cache_var KEY` (anchored — upstream's unanchored match was a bug)
-pub fn del_cache_var(key: &str) {
-    let f = var_file();
-    let text = read(&f);
-    if text.is_empty() {
-        return;
-    }
+/// Var-file text with every `KEY=` line removed and, for a non-empty value, `KEY="VALUE"`
+/// appended (anchored match — upstream's unanchored `sed /KEY/d` was a bug).
+fn var_apply(text: &str, key: &str, value: &str) -> String {
     let pfx = format!("{}=", key);
-    let kept: Vec<&str> = text.lines().filter(|l| !l.starts_with(&pfx)).collect();
-    let mut s = kept.join("\n");
-    if !s.is_empty() {
+    let mut s = String::with_capacity(text.len() + key.len() + value.len() + 4);
+    for l in text.lines().filter(|l| !l.starts_with(&pfx)) {
+        s.push_str(l);
         s.push('\n');
     }
-    let _ = std::fs::write(&f, s);
+    if !value.is_empty() {
+        s.push_str(&format!("{}=\"{}\"\n", key, value));
+    }
+    s
+}
+/// Replace `path` atomically (temp file + rename) so readers never see a truncated file.
+fn write_atomic(path: &str, data: &str) -> bool {
+    if let Some(d) = Path::new(path).parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let tmp = format!("{}.tmp.{}", path, std::process::id());
+    if std::fs::write(&tmp, data).is_ok() && std::fs::rename(&tmp, path).is_ok() {
+        return true;
+    }
+    let _ = std::fs::remove_file(&tmp);
+    false
+}
+fn flock_file(path: &str) -> Option<std::fs::File> {
+    use std::os::unix::io::AsRawFd;
+    if let Some(d) = Path::new(path).parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let f = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(path).ok()?;
+    extern "C" {
+        fn flock(fd: i32, op: i32) -> i32;
+    }
+    loop {
+        if unsafe { flock(f.as_raw_fd(), 2) } == 0 {
+            return Some(f);
+        }
+        if std::io::Error::last_os_error().raw_os_error() != Some(4) {
+            return None; // not EINTR
+        }
+    }
+}
+/// Run a read-modify-write of the var file `file` under `lock`: `f` gets the current text
+/// and returns the new text (None = leave unchanged) plus a result.
+fn var_update_at<R>(file: &str, lock: &str, f: impl FnOnce(&str) -> (Option<String>, R)) -> R {
+    // If the lock cannot be taken (e.g. read-only /tmp/lock) still proceed: no worse than before.
+    let _guard = flock_file(lock);
+    let text = read(file);
+    let (new, r) = f(&text);
+    if let Some(new) = new {
+        if new != text {
+            write_atomic(file, &new);
+        }
+    }
+    r
+}
+fn var_set_at(file: &str, lock: &str, key: &str, value: &str) {
+    var_update_at(file, lock, |t| (Some(var_apply(t, key, value)), ()))
+}
+
+/// `get_cache_var KEY` (lock-free: writers replace the file atomically)
+pub fn get_cache_var(key: &str) -> Option<String> {
+    var_lookup(&read(&var_file()), key)
+}
+/// `del_cache_var KEY`
+pub fn del_cache_var(key: &str) {
+    var_set_at(&var_file(), &var_lock_file(), key, "");
 }
 /// `set_cache_var KEY VALUE` (empty value just deletes)
 pub fn set_cache_var(key: &str, value: &str) {
-    del_cache_var(key);
-    if value.is_empty() {
-        return;
-    }
-    mkdir(TMP_PATH);
-    append_file(&var_file(), &format!("{}=\"{}\"", key, value));
+    var_set_at(&var_file(), &var_lock_file(), key, value);
 }
 
 // ---------------------------------------------------------------- ports
 
-/// `check_port_exists PORT [proto]` → number of listening sockets on port.
-pub fn check_port_exists(port: u16, proto: &str) -> usize {
+/// Number of listening (tcp LISTEN / bound udp) sockets per local port.
+fn listening_ports(proto: &str) -> std::collections::HashMap<u16, usize> {
     let proto = if proto.is_empty() { "tcp,udp" } else { proto };
     let mut files = vec![];
     if proto.contains("tcp") {
@@ -313,8 +368,7 @@ pub fn check_port_exists(port: u16, proto: &str) -> usize {
     if proto.contains("udp") {
         files.extend(["/proc/net/udp", "/proc/net/udp6"]);
     }
-    let hex = format!(":{:04X}", port);
-    let mut n = 0;
+    let mut m = std::collections::HashMap::new();
     for f in files {
         let is_tcp = f.contains("tcp");
         for l in read(f).lines().skip(1) {
@@ -323,42 +377,96 @@ pub fn check_port_exists(port: u16, proto: &str) -> usize {
                 continue;
             }
             // tcp: state 0A == LISTEN ; udp: state 07 (unconnected) counts as bound
-            if cols[1].ends_with(&hex) && (!is_tcp || cols[3] == "0A") {
-                n += 1;
+            if is_tcp && cols[3] != "0A" {
+                continue;
+            }
+            let Some((_, hex)) = cols[1].rsplit_once(':') else { continue };
+            if let Ok(p) = u16::from_str_radix(hex, 16) {
+                *m.entry(p).or_insert(0) += 1;
             }
         }
     }
-    n
+    m
+}
+
+/// `check_port_exists PORT [proto]` → number of listening sockets on port.
+pub fn check_port_exists(port: u16, proto: &str) -> usize {
+    listening_ports(proto).get(&port).copied().unwrap_or(0)
+}
+
+const PORT_MIN: u32 = 1025;
+const PORT_MAX: u32 = 49151;
+
+/// Pick the first port from `start` (wrapping PORT_MAX → PORT_MIN) that is neither busy nor
+/// reserved. Visits every port of the range at most once; None when all are taken.
+// upstream quirk: utils.sh stepped back down (`p-1`) at 49151 and then bounced between 49150
+// and 49151 forever once the top of the range was used up; we wrap to the bottom instead.
+fn pick_port(start: u32, busy: &dyn Fn(u32) -> bool) -> Option<u32> {
+    let mut p = if (PORT_MIN..=PORT_MAX).contains(&start) { start } else { 2001 };
+    for _ in PORT_MIN..=PORT_MAX {
+        if !busy(p) {
+            return Some(p);
+        }
+        p = if p < PORT_MAX { p + 1 } else { PORT_MIN };
+    }
+    None
 }
 
 /// `get_new_port PORT|auto [PROTO]`
 pub fn get_new_port(port: &str, proto: &str) -> u16 {
-    let auto = port == "auto";
-    let mut p: u32 = if auto {
-        get_cache_var("last_get_new_port_auto").and_then(|v| v.parse::<u32>().ok()).map(|v| v + 1).unwrap_or(2001)
-    } else {
-        port.parse().unwrap_or(2001)
-    };
-    let proto = proto.to_lowercase();
-    let mut guard = 0;
-    loop {
-        if !(1025..=49151).contains(&p) {
-            p = 2001;
-        }
-        let busy = check_port_exists(p as u16, &proto) != 0 || get_cache_var(&format!("get_port_{}", p)).is_some_and(|v| !v.is_empty());
-        if !busy {
-            set_cache_var(&format!("get_port_{}", p), "1");
-            if auto {
-                set_cache_var("last_get_new_port_auto", &p.to_string());
+    get_new_port_at(&var_file(), &var_lock_file(), port, &listening_ports(&proto.to_lowercase()))
+}
+fn get_new_port_at(file: &str, lock: &str, port: &str, listening: &std::collections::HashMap<u16, usize>) -> u16 {
+    // The check and the reservation happen under the var lock, so two processes allocating
+    // at the same time cannot both get the same port.
+    var_update_at(file, lock, |text| {
+        let auto = port == "auto";
+        let start: u32 = if auto {
+            var_lookup(text, "last_get_new_port_auto").and_then(|v| v.parse::<u32>().ok()).map(|v| v + 1).unwrap_or(2001)
+        } else {
+            port.parse().unwrap_or(2001)
+        };
+        let reserved: std::collections::HashSet<u32> = text
+            .lines()
+            .filter_map(|l| {
+                let (k, v) = l.strip_prefix("get_port_")?.split_once('=')?;
+                (!v.trim_matches('"').is_empty()).then(|| k.parse().ok()).flatten()
+            })
+            .collect();
+        let busy = |p: u32| listening.get(&(p as u16)).copied().unwrap_or(0) != 0 || reserved.contains(&p);
+        match pick_port(start, &busy) {
+            Some(p) => {
+                let mut t = var_apply(text, &format!("get_port_{}", p), "1");
+                if auto {
+                    t = var_apply(&t, "last_get_new_port_auto", &p.to_string());
+                }
+                (Some(t), p as u16)
             }
-            return p as u16;
+            None => {
+                log(0, "get_new_port: no free port left in 1025-49151");
+                let p = if (PORT_MIN..=PORT_MAX).contains(&start) { start } else { 2001 };
+                (None, p as u16)
+            }
         }
-        guard += 1;
-        if guard > 50000 {
-            return p as u16;
-        }
-        p = if p < 49151 { p + 1 } else if p > 1025 { p - 1 } else { 2001 };
+    })
+}
+
+/// Reap every exited child without blocking (`waitpid(-1, WNOHANG)` loop). Long-running
+/// single-threaded daemons call this each iteration so the processes they spawn and drop
+/// (`spawn_bg` / `spawn_shell`) do not linger as zombies. Must not run concurrently with a
+/// `Command::output()/status()` in another thread of the same process (it could reap that
+/// child first). Returns the number reaped.
+pub fn reap_children() -> usize {
+    extern "C" {
+        fn waitpid(pid: i32, status: *mut i32, options: i32) -> i32;
     }
+    const WNOHANG: i32 = 1;
+    let mut n = 0;
+    let mut st: i32 = 0;
+    while unsafe { waitpid(-1, &mut st, WNOHANG) } > 0 {
+        n += 1;
+    }
+    n
 }
 
 // ---------------------------------------------------------------- host / ip helpers
@@ -658,5 +766,93 @@ mod tests {
     fn t_b64() {
         assert_eq!(b64_decode("aGVsbG8").unwrap(), "hello");
         assert_eq!(url_decode("a%20b"), "a b");
+    }
+
+    fn tdir(name: &str) -> String {
+        let d = std::env::temp_dir().join(format!("pw2-util-{}-{}", std::process::id(), name));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d.to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn t_var_apply_lookup() {
+        let t = var_apply("", "A", "1");
+        let t = var_apply(&t, "AB", "2");
+        let t = var_apply(&t, "A", "3");
+        assert_eq!(t, "AB=\"2\"\nA=\"3\"\n");
+        assert_eq!(var_lookup(&t, "A").as_deref(), Some("3"));
+        assert_eq!(var_lookup(&t, "AB").as_deref(), Some("2"));
+        assert_eq!(var_lookup(&t, "B"), None);
+        assert_eq!(var_apply(&t, "A", ""), "AB=\"2\"\n");
+        assert_eq!(var_apply("", "X", ""), "");
+    }
+
+    #[test]
+    fn t_var_concurrent_writers_keep_all_keys() {
+        let d = tdir("var");
+        let (f, l) = (format!("{}/var", d), format!("{}/var.lock", d));
+        let hs: Vec<_> = (0..8)
+            .map(|t| {
+                let (f, l) = (f.clone(), l.clone());
+                std::thread::spawn(move || {
+                    for i in 0..40 {
+                        var_set_at(&f, &l, &format!("K{}_{}", t, i), "v");
+                        if i % 2 == 1 {
+                            var_set_at(&f, &l, &format!("K{}_{}", t, i - 1), "");
+                        }
+                    }
+                })
+            })
+            .collect();
+        for h in hs {
+            h.join().unwrap();
+        }
+        let text = read(&f);
+        for t in 0..8 {
+            for i in 0..40 {
+                assert_eq!(var_lookup(&text, &format!("K{}_{}", t, i)).is_some(), i % 2 == 1, "K{}_{}", t, i);
+            }
+        }
+        assert_eq!(text.lines().count(), 8 * 20);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn t_pick_port_wraps_and_terminates() {
+        assert_eq!(pick_port(48900, &|_| false), Some(48900));
+        // top of the range used up: wrap to the bottom instead of bouncing 49150<->49151
+        assert_eq!(pick_port(48900, &|p| p >= 48900), Some(PORT_MIN));
+        assert_eq!(pick_port(49151, &|p| p == 49151 || p == PORT_MIN), Some(PORT_MIN + 1));
+        assert_eq!(pick_port(80, &|_| false), Some(2001));
+        assert_eq!(pick_port(48900, &|_| true), None);
+    }
+
+    #[test]
+    fn t_get_new_port_unique_across_threads() {
+        let d = tdir("port");
+        let (f, l) = (format!("{}/var", d), format!("{}/var.lock", d));
+        let mut listening = std::collections::HashMap::new();
+        listening.insert(48901u16, 1usize);
+        let hs: Vec<_> = (0..4)
+            .map(|_| {
+                let (f, l, ls) = (f.clone(), l.clone(), listening.clone());
+                std::thread::spawn(move || (0..30).map(|_| get_new_port_at(&f, &l, "48900", &ls)).collect::<Vec<u16>>())
+            })
+            .collect();
+        let mut all: Vec<u16> = hs.into_iter().flat_map(|h| h.join().unwrap()).collect();
+        all.sort();
+        let n = all.len();
+        all.dedup();
+        assert_eq!(all.len(), n, "duplicate port handed out");
+        assert!(!all.contains(&48901));
+        // releasing a reservation makes the port available again
+        var_set_at(&f, &l, "get_port_48900", "");
+        assert_eq!(get_new_port_at(&f, &l, "48900", &listening), 48900);
+        // auto mode continues after the last auto port
+        let a = get_new_port_at(&f, &l, "auto", &listening);
+        assert_eq!(a, 2001);
+        assert_eq!(get_new_port_at(&f, &l, "auto", &listening), 2002);
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

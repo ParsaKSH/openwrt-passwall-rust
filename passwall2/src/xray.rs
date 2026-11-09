@@ -25,6 +25,30 @@ use std::rc::Rc;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod server_raw_tests {
+    use super::*;
+    fn raw_of(extra: &str) -> Value {
+        let cfg_s = Config::parse(
+            "passwall2_server",
+            &format!("config server 's1'\n\toption type 'Xray'\n\toption protocol 'vless'\n\toption port '443'\n\toption uuid 'x'\n\toption transport 'raw'\n{}", extra),
+        );
+        let cfg_c = Config::parse("passwall2", "");
+        let node = node_of(cfg_s.section("s1").unwrap());
+        let c = server_config(&cfg_c, &cfg_s, node, false);
+        c["inbounds"][0]["streamSettings"].get("rawSettings").cloned().unwrap_or(Value::Null)
+    }
+    #[test]
+    fn server_raw_header_omitted_without_guise() {
+        // no tcp_guise: no header object at all (an empty `header` is rejected by Xray)
+        assert_eq!(raw_of(""), Value::Null);
+        assert_eq!(raw_of("\toption tcp_guise ''\n"), Value::Null);
+        assert_eq!(raw_of("\toption tcp_guise 'none'\n"), json!({"header": {"type": "none"}}));
+        let h = raw_of("\toption tcp_guise 'http'\n\tlist tcp_guise_http_host 'h.com'\n");
+        assert_eq!(h["header"]["type"], "http");
+        assert_eq!(h["header"]["request"]["path"], json!(["/"]));
+    }
+}
 
 /// `xray_min_version`
 pub const XRAY_MIN_VERSION: &str = "26.7.11";
@@ -2368,20 +2392,23 @@ fn server_config(cfg_c: &Config, cfg_s: &Config, mut node: Node, effects: bool) 
     } else {
         Value::Null
     };
-    let raw_settings = if tp == "raw" || tp == "tcp" {
-        let tg = gs("tcp_guise");
-        let request = if tg.as_deref() == Some("http") {
-            let path: Vec<String> = match nl(&node, "tcp_guise_http_path") {
-                Some(l) => l.into_iter().map(|v| if v.is_empty() { "/".into() } else { v }).collect(),
-                None => vec!["/".into()],
+    // upstream quirk: Lua always emits `header = { type = node.tcp_guise }`, which for an unset
+    // tcp_guise becomes an empty header object that Xray rejects (no header type). Without a
+    // guise there is nothing to configure, so rawSettings is omitted (Xray's default: no header).
+    let raw_settings = match gs("tcp_guise").filter(|g| !g.is_empty() && (tp == "raw" || tp == "tcp")) {
+        Some(tg) => {
+            let request = if tg == "http" {
+                let path: Vec<String> = match nl(&node, "tcp_guise_http_path") {
+                    Some(l) => l.into_iter().map(|v| if v.is_empty() { "/".into() } else { v }).collect(),
+                    None => vec!["/".into()],
+                };
+                json!({ "path": path, "headers": { "Host": raw(&node, "tcp_guise_http_host").unwrap_or(json!([])) } })
+            } else {
+                Value::Null
             };
-            json!({ "path": path, "headers": { "Host": raw(&node, "tcp_guise_http_host").unwrap_or(json!([])) } })
-        } else {
-            Value::Null
-        };
-        json!({ "header": { "type": tg, "request": request } })
-    } else {
-        Value::Null
+            json!({ "header": { "type": tg, "request": request } })
+        }
+        None => Value::Null,
     };
     let kcp_settings = if tp == "mkcp" {
         json!({

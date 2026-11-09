@@ -2700,7 +2700,8 @@ mod tests {
 
     #[test]
     fn tls_insecure_pre_1_15() {
-        let cases: [(&[(&str, &str)], Option<bool>); 4] = [
+        type Case<'a> = (&'a [(&'a str, &'a str)], Option<bool>);
+        let cases: [Case; 4] = [
             (&[], None),
             (&[("tls_allowInsecure", "0")], None),
             (&[("tls_allowInsecure", "1")], Some(true)),

@@ -160,6 +160,18 @@ define Package/$(PKG_NAME)/conffiles
 /usr/share/passwall2/domains_excluded
 endef
 
+# the backend's self-update writes progress files to passwall2-update/ (owned by no package):
+# remove it with the package, keeping files younger than 5 minutes (an update in progress)
+define Package/$(PKG_NAME)/postrm
+#!/bin/sh
+[ -n "$${IPKG_INSTROOT}" ] && exit 0
+d=/www/luci-static/resources/passwall2-update
+[ -d "$$d" ] || exit 0
+find "$$d" -type f -mmin +5 -exec rm -f {} + 2>/dev/null
+rmdir "$$d" 2>/dev/null
+exit 0
+endef
+
 # luci.mk copies htdocs/ and root/; add the Rust crate for passwall2-rs.
 define Build/Prepare/luci-app-passwall2
 	mkdir -p $(PKG_BUILD_DIR)/rust

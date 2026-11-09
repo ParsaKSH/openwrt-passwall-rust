@@ -243,6 +243,18 @@ BIN_POSTINST_PKG='#!/bin/sh
 	exit 0
 }'
 
+# The backend's self-update writes progress files to /www/luci-static/resources/passwall2-update/
+# (owned by no package). Clean it up when the LuCI package is removed. Files younger than 5 minutes
+# are kept: opkg runs the removal scripts of the old package on --force-reinstall, which is
+# exactly when a self-update is reporting progress there.
+LUCI_POSTRM='#!/bin/sh
+[ -n "${IPKG_INSTROOT}" ] && exit 0
+d=/www/luci-static/resources/passwall2-update
+[ -d "$d" ] || exit 0
+find "$d" -type f -mmin +5 -exec rm -f {} + 2>/dev/null
+rmdir "$d" 2>/dev/null
+exit 0'
+
 IPK_POSTINST='#!/bin/sh
 [ "${IPKG_NO_SCRIPT}" = "1" ] && exit 0
 [ -s ${IPKG_INSTROOT}/lib/functions.sh ] || exit 0
@@ -254,9 +266,9 @@ IPK_PRERM='#!/bin/sh
 default_prerm $0 $@'
 
 # ------------------------------------------------------------------ 5. ipk (same layout as OpenWrt's ipkg-build)
-# mk_ipk <name> <arch> <rootdir> <depends> <provides> <conflicts> <description> <postinst-pkg> <conffiles> <outdir>
+# mk_ipk <name> <arch> <rootdir> <depends> <provides> <conflicts> <description> <postinst-pkg> <conffiles> <outdir> [postrm]
 mk_ipk() {
-	local name="$1" arch="$2" root="$3" depends="$4" provides="$5" conflicts="$6" desc="$7" pinst="$8" conff="$9" outdir="${10}"
+	local name="$1" arch="$2" root="$3" depends="$4" provides="$5" conflicts="$6" desc="$7" pinst="$8" conff="$9" outdir="${10}" postrm="${11:-}"
 	local tmp="$WORK/ipk.$name.$arch" section=net
 	[ "${name#luci-}" != "$name" ] && section=luci
 	rm -rf "$tmp"
@@ -287,8 +299,10 @@ mk_ipk() {
 	printf '%s\n' "$IPK_PRERM" >"$tmp/control/prerm"
 	[ -n "$pinst" ] && printf '%s\n' "$pinst" >"$tmp/control/postinst-pkg"
 	[ -n "$conff" ] && printf '%s\n' "$conff" >"$tmp/control/conffiles"
+	[ -n "$postrm" ] && printf '%s\n' "$postrm" >"$tmp/control/postrm"
 	chmod 0644 "$tmp/control/"*
 	chmod 0755 "$tmp/control/postinst" "$tmp/control/prerm"
+	[ -f "$tmp/control/postrm" ] && chmod 0755 "$tmp/control/postrm"
 	[ -f "$tmp/control/postinst-pkg" ] && chmod 0755 "$tmp/control/postinst-pkg"
 	(cd "$tmp/control" && tar "${TAR_OPTS[@]}" -cf - .) | gzip -9n >"$tmp/control.tar.gz"
 	echo "2.0" >"$tmp/debian-binary"
@@ -320,9 +334,9 @@ find_apk() {
 	APK_MODE=""
 }
 
-# mk_apk <name> <arch> <rootdir> <depends(space sep)> <provides> <description> <postinst-pkg> <conffiles> <outdir>
+# mk_apk <name> <arch> <rootdir> <depends(space sep)> <provides> <description> <postinst-pkg> <conffiles> <outdir> [postrm]
 mk_apk() {
-	local name="$1" arch="$2" root="$3" depends="$4" provides="$5" desc="$6" pinst="$7" conff="$8" outdir="$9"
+	local name="$1" arch="$2" root="$3" depends="$4" provides="$5" desc="$6" pinst="$7" conff="$8" outdir="$9" postrm="${10:-}"
 	local tmp="$WORK/apk.$name.$arch"
 	rm -rf "$tmp"
 	mkdir -p "$tmp/files" "$tmp/scripts" "$outdir"
@@ -367,6 +381,7 @@ mk_apk() {
 		echo "export pkgname=\"$name\""
 		echo 'default_prerm'
 	} >"$tmp/scripts/pre-deinstall"
+	[ -n "$postrm" ] && printf '%s\n' "$postrm" >"$tmp/scripts/post-deinstall"
 	chmod 0755 "$tmp/scripts/"*
 	local apkarch="$arch"
 	[ "$arch" = all ] && apkarch=noarch
@@ -386,6 +401,9 @@ mk_apk() {
 		--script "post-install:$tmp/scripts/post-install"
 		--script "post-upgrade:$tmp/scripts/post-upgrade"
 		--script "pre-deinstall:$tmp/scripts/pre-deinstall"
+	)
+	[ -n "$postrm" ] && args+=(--script "post-deinstall:$tmp/scripts/post-deinstall")
+	args+=(
 		--info "depends:$depends"
 		--files "$tmp/files"
 		--output "$out"
@@ -443,7 +461,7 @@ ipk_conflicts() {
 
 if [ -z "${NO_IPK:-}" ]; then
 	mk_ipk luci-app-passwall2-rs all "$WORK/luci-root" "$(ipk_luci_depends)" "luci-app-passwall2" \
-		"$(ipk_conflicts)" "$LUCI_DESC" "$LUCI_POSTINST_PKG" "$CONFFILES" "$DIST/ipk/all"
+		"$(ipk_conflicts)" "$LUCI_DESC" "$LUCI_POSTINST_PKG" "$CONFFILES" "$DIST/ipk/all" "$LUCI_POSTRM"
 	cp "$DIST/ipk/all/luci-app-passwall2-rs_${VERSION}_all.ipk" "$DIST/release/luci-app-passwall2-rs_all.ipk"
 	for a in "${SELECTED[@]}"; do
 		t="$(rust_target_of "$a")"
@@ -460,7 +478,7 @@ if [ -z "${NO_APK:-}" ]; then
 	else
 		log "apk mkpkg via $APK_MODE"
 		mk_apk luci-app-passwall2-rs all "$WORK/luci-root" "$(apk_luci_depends)" "luci-app-passwall2=$VERSION" \
-			"$LUCI_DESC" "$LUCI_POSTINST_PKG" "$CONFFILES" "$DIST/apk/noarch"
+			"$LUCI_DESC" "$LUCI_POSTINST_PKG" "$CONFFILES" "$DIST/apk/noarch" "$LUCI_POSTRM"
 		cp "$DIST/apk/noarch/luci-app-passwall2-rs-$VERSION.apk" "$DIST/release/luci-app-passwall2-rs_noarch.apk"
 		for a in "${SELECTED[@]}"; do
 			t="$(rust_target_of "$a")"

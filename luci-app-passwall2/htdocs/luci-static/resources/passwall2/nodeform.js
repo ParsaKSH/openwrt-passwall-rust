@@ -1563,7 +1563,7 @@ var UINodeCheckList = ui.AbstractElement.extend({
 			var visible = boxes.filter(function(b) { return !b.closest('.pw-ncl-item').hidden; });
 			var q = search.value.trim();
 			var pool = q ? visible : boxes;
-			counter.innerHTML = _('Selected:') + ' <b>' + pool.filter(function(b) { return b.checked; }).length + '/' + pool.length + '</b>';
+			dom.content(counter, [_('Selected:') + ' ', E('b', {}, [pool.filter(function(b) { return b.checked; }).length + '/' + pool.length])]);
 			list.querySelectorAll('.pw-ncl-group').forEach(function(gd) {
 				var bs = Array.prototype.slice.call(gd.querySelectorAll('input[type=checkbox]'));
 				var c = gd.querySelector('.pw-ncl-gcount');
@@ -1933,7 +1933,9 @@ function applyFields(s, sid, fields, sharelink) {
 		} else {
 			var sv = String(v);
 			if (typeof el.addChoices === 'function' && o.keylist && o.keylist.indexOf(sv) < 0 && sv !== '') {
-				var lab = {}; lab[sv] = sv;
+				/* the value comes from a share link: an array label becomes a text node, while a
+				 * string label would go through innerHTML in ui.Dropdown.createChoiceElement() */
+				var lab = {}; lab[sv] = [sv];
 				try { el.addChoices([sv], lab); } catch (e) {}
 			}
 			el.setValue(sv);

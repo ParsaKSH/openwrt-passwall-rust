@@ -8,6 +8,12 @@
  * hid the menu entry can bring it back by opening .../passwall2/show.
  * show: delete @global[0].hide_from_luci, then go to the PassWall 2 main page.
  * hide: set hide_from_luci=1, then go to Status -> Overview (asks first, since this is a GET URL).
+ *
+ * The menu entry itself (menu.d "admin/services/passwall2_menu") follows upstream's
+ * `hide_from_luci ~= "1"` check. menu.d cannot say "not equal", so it lists the alternatives
+ * "option absent" OR "option == '0'" (depends.uci as an array = any of them). Those are the
+ * only values that the backend (delete / "1") or a Flag widget ("0" / "1") ever write. A
+ * hand-written value such as "yes" hides the entry here, while upstream would still show it.
  */
 return view.extend({
 	load() {

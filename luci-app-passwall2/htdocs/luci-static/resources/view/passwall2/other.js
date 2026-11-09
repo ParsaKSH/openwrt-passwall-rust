@@ -62,7 +62,7 @@ const FileTextValue = form.TextValue.extend({
 		return fs.write(this.filePath, content).then(() => {
 			this.fileContent = content;
 		}).catch((e) => {
-			ui.addNotification(null, E('p', _('Unable to save contents: %s').format(e.message)));
+			ui.addNotification(null, E('p', {}, [ _('Unable to save contents: %s').format(e && e.message || e) ]));
 		});
 	},
 	transform: function (v) { return String(v); },

@@ -56,8 +56,8 @@ function header(title, desc) {
 	}
 	catch (e) {}
 	return E('div', { 'class': 'pw-page-header' }, [
-		E('h2', {}, title),
-		desc ? E('div', { 'class': 'cbi-map-descr' }, desc) : ''
+		E('h2', {}, [ title ]),
+		desc ? E('div', { 'class': 'cbi-map-descr' }, [ desc ]) : ''
 	]);
 }
 
@@ -101,49 +101,10 @@ function formatServerType(s) {
 	return type ? _(type) : '';
 }
 
-/* Per-instance log (upstream: new tab on server_log?id=; text with <br />, or an alert script). */
+/* Per-instance log (upstream: new tab on server_log?id=; text with <br />, or an alert script).
+ * pw.showLog() turns the title into a text node, so remarks are never parsed as HTML. */
 function showServerLog(sid, remarks) {
-	if (typeof(pw.showLog) == 'function')
-		return pw.showLog(_('Log') + (remarks ? ': ' + remarks : ''), 'server_log', { id: sid });
-
-	var ta = E('textarea', {
-		'class': 'cbi-input-textarea',
-		'style': 'width:100%;font-family:monospace;',
-		'rows': 25,
-		'wrap': 'off',
-		'readonly': 'readonly'
-	});
-	var note = E('p', { 'class': 'pw-log-status' }, _('Collecting data...'));
-
-	ui.showModal(_('Log') + (remarks ? ': ' + remarks : ''), [
-		note,
-		ta,
-		E('div', { 'class': 'right' }, [
-			E('a', {
-				'class': 'btn cbi-button cbi-button-neutral',
-				'href': url('log') + '?server=' + encodeURIComponent(sid),
-				'target': '_blank'
-			}, _('Runtime Logs')),
-			' ',
-			E('button', { 'class': 'btn cbi-button', 'click': ui.hideModal }, _('Close'))
-		])
-	], 'cbi-modal');
-
-	return Promise.resolve().then(function() {
-		return pw.call('server_log', { id: sid });
-	}).then(function(res) {
-		var raw = String((res && res.result != null) ? res.result : (typeof(res) == 'string' ? res : ''));
-		if (/<script>\s*alert\(/i.test(raw)) {
-			note.textContent = _('Not enabled log');
-			return;
-		}
-		note.textContent = '';
-		note.style.display = 'none';
-		ta.value = raw.replace(/<br\s*\/?>/gi, '\n');
-		ta.scrollTop = ta.scrollHeight;
-	}).catch(function(e) {
-		note.textContent = _('Error') + (e && e.message ? ': ' + e.message : '');
-	});
+	return pw.showLog(_('Log') + (remarks ? ': ' + remarks : ''), 'server_log', { id: sid });
 }
 
 return view.extend({
@@ -239,7 +200,7 @@ return view.extend({
 		o = s.option(form.DummyValue, 'type', _('Type'));
 		o.width = '20%';
 		o.renderWidget = function(section_id) {
-			return E('span', {}, formatServerType(uci.get(CONF, section_id) || {}));
+			return E('span', {}, [ formatServerType(uci.get(CONF, section_id) || {}) ]);
 		};
 
 		o = s.option(form.DummyValue, 'port', _('Port'));

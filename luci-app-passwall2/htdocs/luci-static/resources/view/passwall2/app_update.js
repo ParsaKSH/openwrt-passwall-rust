@@ -28,6 +28,13 @@ var COM = {
 	'sing-box': { name: 'Sing-Box', default_path: '/usr/bin/sing-box' }
 };
 
+/* Release links come from the remote release API (possibly via a GitHub proxy): only plain
+ * http(s) URLs may become an href, anything else (javascript:, data:, ...) is dropped. */
+function safeHttpUrl(u) {
+	u = (u == null) ? '' : String(u).trim();
+	return /^https?:\/\/[^\s"'<>]+$/i.test(u) ? u : null;
+}
+
 function header(title, desc) {
 	try {
 		if (typeof(pw.pageHeader) == 'function') {
@@ -38,8 +45,8 @@ function header(title, desc) {
 	}
 	catch (e) {}
 	return E('div', { 'class': 'pw-page-header' }, [
-		E('h2', {}, title),
-		desc ? E('div', { 'class': 'cbi-map-descr' }, desc) : ''
+		E('h2', {}, [ title ]),
+		desc ? E('div', { 'class': 'cbi-map-descr' }, [ desc ]) : ''
 	]);
 }
 
@@ -178,9 +185,11 @@ function createUpdater() {
 				if (detailEl) {
 					dom.content(detailEl, '');
 					if (json.remote_version) {
-						var em = E('em', { 'style': 'color:red;' }, String(json.remote_version));
-						if (json.html_url)
-							em = E('a', { 'href': String(json.html_url), 'target': '_blank', 'rel': 'noreferrer' }, em);
+						/* both values come from the remote release API: text node only, http(s) links only */
+						var em = E('em', { 'style': 'color:red;' }, [ String(json.remote_version) ]);
+						var link = safeHttpUrl(json.html_url);
+						if (link)
+							em = E('a', { 'href': link, 'target': '_blank', 'rel': 'noreferrer noopener' }, [ em ]);
 						detailEl.appendChild(em);
 					}
 				}

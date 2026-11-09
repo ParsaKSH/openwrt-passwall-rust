@@ -1,0 +1,3 @@
+#!/bin/sh
+# rpcd exec plugin for the luci.passwall2 ubus object (list | call <method>).
+exec /usr/bin/passwall2 rpc "$@"

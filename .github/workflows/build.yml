@@ -1,0 +1,81 @@
+name: build
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      arches:
+        description: 'OpenWrt arches ("core", "all" or a space separated list)'
+        default: all
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: >-
+            x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,
+            armv7-unknown-linux-musleabihf,arm-unknown-linux-musleabihf,
+            armv7-unknown-linux-musleabi,arm-unknown-linux-musleabi,armv5te-unknown-linux-musleabi,
+            i686-unknown-linux-musl,i586-unknown-linux-musl,
+            riscv64gc-unknown-linux-musl,loongarch64-unknown-linux-musl
+
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cache/passwall2-rs
+            target
+          key: pw2-${{ runner.os }}-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
+          restore-keys: pw2-${{ runner.os }}-
+
+      - name: Unit tests
+        run: cargo test --release
+
+      - name: Version
+        id: ver
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            v="${GITHUB_REF_NAME#v}"
+            case "$v" in
+              *-*) echo "PKG_VERSION=${v%-*}" >>"$GITHUB_ENV"; echo "PKG_RELEASE=${v##*-}" >>"$GITHUB_ENV" ;;
+              *) echo "PKG_VERSION=$v" >>"$GITHUB_ENV" ;;
+            esac
+          fi
+
+      - name: Build packages
+        env:
+          ARCHES: ${{ github.event.inputs.arches || 'all' }}
+          APK_REQUIRED: "1"
+        run: packaging/build.sh
+
+      - name: Check packages
+        run: packaging/test.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: passwall2-rs-packages
+          path: |
+            dist/release
+            dist/ipk
+            dist/apk
+
+      - name: Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/release/*
+          generate_release_notes: true

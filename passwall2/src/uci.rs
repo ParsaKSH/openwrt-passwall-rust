@@ -169,8 +169,8 @@ impl Config {
         let mut cfg = Config { name: name.to_string(), sections: vec![] };
         let mut anon_counter = 0usize;
         let mut type_count: IndexMap<String, usize> = IndexMap::new();
-        for line in text.lines() {
-            let toks = tokenize(line);
+        for toks in tokenize_stmts(text) {
+            let toks = toks;
             if toks.is_empty() {
                 continue;
             }
@@ -268,21 +268,42 @@ impl Config {
     }
 }
 
-/// Tokenize a uci config line honoring '...' and "..." and backslash escapes.
-fn tokenize(line: &str) -> Vec<String> {
-    let mut out = vec![];
+/// Split a whole config text into statements (token lists). Newlines end a
+/// statement only outside quotes, so multi-line quoted values are preserved
+/// (as libuci does).
+#[allow(unused_assignments)]
+fn tokenize_stmts(text: &str) -> Vec<Vec<String>> {
+    let mut stmts = vec![];
+    let mut toks: Vec<String> = vec![];
     let mut cur = String::new();
     let mut in_tok = false;
-    let mut chars = line.chars().peekable();
+    let mut chars = text.chars().peekable();
+    macro_rules! end_tok {
+        () => {
+            if in_tok {
+                toks.push(std::mem::take(&mut cur));
+                in_tok = false;
+            }
+        };
+    }
     while let Some(c) = chars.next() {
         match c {
-            '#' if !in_tok => break,
-            ' ' | '\t' => {
-                if in_tok {
-                    out.push(std::mem::take(&mut cur));
-                    in_tok = false;
+            '\n' => {
+                end_tok!();
+                if !toks.is_empty() {
+                    stmts.push(std::mem::take(&mut toks));
                 }
             }
+            '#' if !in_tok => {
+                // comment to end of line
+                while let Some(&n) = chars.peek() {
+                    if n == '\n' {
+                        break;
+                    }
+                    chars.next();
+                }
+            }
+            ' ' | '\t' | '\r' => end_tok!(),
             '\'' => {
                 in_tok = true;
                 for c2 in chars.by_ref() {
@@ -299,7 +320,9 @@ fn tokenize(line: &str) -> Vec<String> {
                         '"' => break,
                         '\\' => {
                             if let Some(n) = chars.next() {
-                                cur.push(n)
+                                if n != '\n' {
+                                    cur.push(n)
+                                }
                             }
                         }
                         _ => cur.push(c2),
@@ -309,7 +332,9 @@ fn tokenize(line: &str) -> Vec<String> {
             '\\' => {
                 in_tok = true;
                 if let Some(n) = chars.next() {
-                    cur.push(n)
+                    if n != '\n' {
+                        cur.push(n)
+                    }
                 }
             }
             _ => {
@@ -318,10 +343,11 @@ fn tokenize(line: &str) -> Vec<String> {
             }
         }
     }
-    if in_tok {
-        out.push(cur);
+    end_tok!();
+    if !toks.is_empty() {
+        stmts.push(toks);
     }
-    out
+    stmts
 }
 
 /// Quote a value for `uci batch` (single-quote style).
@@ -459,5 +485,8 @@ mod tests {
         assert_eq!(c.list_raw("@global[0]", "x"), vec!["a b".to_string(), "c".to_string()]);
         assert_eq!(c.section("abc").unwrap().stype, "nodes");
         assert_eq!(c.section("@nodes[-1]").unwrap().name, "abc");
+        let m = Config::parse("p", "config shunt_rules 'r'\n\toption domain_list 'a.com\nb.com\n'\n\toption x '1' # c\n");
+        assert_eq!(m.s("r", "domain_list"), "a.com\nb.com\n");
+        assert_eq!(m.s("r", "x"), "1");
     }
 }

@@ -1,0 +1,190 @@
+{
+	"admin/services/passwall2": {
+		"action": {
+			"type": "alias",
+			"path": "admin/services/passwall2/settings"
+		},
+		"depends": {
+			"acl": [ "luci-app-passwall2" ]
+		}
+	},
+
+	"admin/services/passwall2_menu": {
+		"title": "PassWall 2",
+		"order": 0,
+		"action": {
+			"type": "alias",
+			"path": "admin/services/passwall2/settings"
+		},
+		"depends": {
+			"acl": [ "luci-app-passwall2" ],
+			"uci": { "passwall2": { "@global": { "hide_from_luci": null } } }
+		}
+	},
+
+	"admin/services/passwall2/settings": {
+		"title": "Basic Settings",
+		"order": 1,
+		"action": {
+			"type": "view",
+			"path": "passwall2/global"
+		}
+	},
+
+	"admin/services/passwall2/node_list": {
+		"title": "Node List",
+		"order": 2,
+		"action": {
+			"type": "view",
+			"path": "passwall2/node_list"
+		}
+	},
+
+	"admin/services/passwall2/node_subscribe": {
+		"title": "Node Subscribe",
+		"order": 3,
+		"action": {
+			"type": "view",
+			"path": "passwall2/node_subscribe"
+		}
+	},
+
+	"admin/services/passwall2/other": {
+		"title": "Other Settings",
+		"order": 92,
+		"action": {
+			"type": "view",
+			"path": "passwall2/other"
+		}
+	},
+
+	"admin/services/passwall2/haproxy": {
+		"title": "Load Balancing",
+		"order": 93,
+		"action": {
+			"type": "view",
+			"path": "passwall2/haproxy"
+		},
+		"depends": {
+			"fs": { "/usr/sbin/haproxy": "executable" }
+		}
+	},
+
+	"admin/services/passwall2/app_update": {
+		"title": "App Update",
+		"order": 95,
+		"action": {
+			"type": "view",
+			"path": "passwall2/app_update"
+		}
+	},
+
+	"admin/services/passwall2/rule": {
+		"title": "Rule Manage",
+		"order": 96,
+		"action": {
+			"type": "view",
+			"path": "passwall2/rule"
+		}
+	},
+
+	"admin/services/passwall2/geoview": {
+		"title": "Geo View",
+		"order": 97,
+		"action": {
+			"type": "view",
+			"path": "passwall2/geoview"
+		},
+		"depends": {
+			"fs": [
+				{ "/usr/bin/geoview": "executable" },
+				{ "/bin/geoview": "executable" },
+				{ "/usr/sbin/geoview": "executable" },
+				{ "/tmp/geoview": "executable" }
+			]
+		}
+	},
+
+	"admin/services/passwall2/acl": {
+		"title": "Access control",
+		"order": 98,
+		"action": {
+			"type": "view",
+			"path": "passwall2/acl"
+		}
+	},
+
+	"admin/services/passwall2/server": {
+		"title": "Server-Side",
+		"order": 99,
+		"action": {
+			"type": "view",
+			"path": "passwall2/server"
+		}
+	},
+
+	"admin/services/passwall2/log": {
+		"title": "Runtime Logs",
+		"order": 999,
+		"action": {
+			"type": "view",
+			"path": "passwall2/log"
+		}
+	},
+
+	"admin/services/passwall2/node_subscribe_config": {
+		"action": {
+			"type": "view",
+			"path": "passwall2/node_subscribe_config"
+		},
+		"wildcard": true
+	},
+
+	"admin/services/passwall2/node_config": {
+		"action": {
+			"type": "view",
+			"path": "passwall2/node_config"
+		},
+		"wildcard": true
+	},
+
+	"admin/services/passwall2/shunt_rules": {
+		"action": {
+			"type": "view",
+			"path": "passwall2/shunt_rules"
+		},
+		"wildcard": true
+	},
+
+	"admin/services/passwall2/socks_config": {
+		"action": {
+			"type": "view",
+			"path": "passwall2/socks_config"
+		},
+		"wildcard": true
+	},
+
+	"admin/services/passwall2/acl_config": {
+		"action": {
+			"type": "view",
+			"path": "passwall2/acl_config"
+		},
+		"wildcard": true
+	},
+
+	"admin/services/passwall2/server_config": {
+		"action": {
+			"type": "view",
+			"path": "passwall2/server_config"
+		},
+		"wildcard": true
+	},
+
+	"admin/services/passwall2/server_user_config": {
+		"action": {
+			"type": "view",
+			"path": "passwall2/server_user_config"
+		},
+		"wildcard": true
+	}
+}

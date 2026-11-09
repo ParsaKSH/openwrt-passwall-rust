@@ -1,0 +1,46 @@
+# OpenWrt package architecture  ->  Rust target used for the static (musl) binary.
+#
+# Column 3 ("set") selects which arches packaging/build.sh builds by default:
+#   core  : built by default (Rust targets x86_64, aarch64, armv7 hard-float, armv6 hard-float)
+#   extra : built with ARCHES=all (build.sh runs `rustup target add` for them when RUSTUP_ADD=1)
+#   sdk   : no prebuilt Rust std for this target (MIPS, PowerPC, ...): build inside the
+#           OpenWrt SDK/buildroot with luci-app-passwall2/Makefile instead.
+#
+# The binary is fully static, so the float ABI of the router's libc does not matter; what
+# matters is that the instruction set is supported by the CPU (e.g. soft-float arches get
+# a soft-float binary because their CPUs may have no VFP unit).
+#
+# openwrt_arch                rust_target                         set
+x86_64                        x86_64-unknown-linux-musl           core
+aarch64_generic               aarch64-unknown-linux-musl          core
+aarch64_cortex-a53            aarch64-unknown-linux-musl          core
+aarch64_cortex-a72            aarch64-unknown-linux-musl          core
+aarch64_cortex-a76            aarch64-unknown-linux-musl          core
+arm_cortex-a5_vfpv4           armv7-unknown-linux-musleabihf      core
+arm_cortex-a7_neon-vfpv4      armv7-unknown-linux-musleabihf      core
+arm_cortex-a7_vfpv4           armv7-unknown-linux-musleabihf      core
+arm_cortex-a8_vfpv3           armv7-unknown-linux-musleabihf      core
+arm_cortex-a9_neon            armv7-unknown-linux-musleabihf      core
+arm_cortex-a9_vfpv3-d16       armv7-unknown-linux-musleabihf      core
+arm_cortex-a15_neon-vfpv4     armv7-unknown-linux-musleabihf      core
+arm_arm1176jzf-s_vfp          arm-unknown-linux-musleabihf        core
+arm_cortex-a7                 armv7-unknown-linux-musleabi        extra
+arm_cortex-a9                 armv7-unknown-linux-musleabi        extra
+arm_mpcore                    arm-unknown-linux-musleabi          extra
+arm_arm926ej-s                armv5te-unknown-linux-musleabi      extra
+arm_xscale                    armv5te-unknown-linux-musleabi      extra
+i386_pentium4                 i686-unknown-linux-musl             extra
+i386_pentium-mmx              i586-unknown-linux-musl             extra
+riscv64_riscv64               riscv64gc-unknown-linux-musl        extra
+riscv64_generic               riscv64gc-unknown-linux-musl        extra
+loongarch64_generic           loongarch64-unknown-linux-musl      extra
+mipsel_24kc                   mipsel-unknown-linux-musl           sdk
+mipsel_74kc                   mipsel-unknown-linux-musl           sdk
+mipsel_mips32                 mipsel-unknown-linux-musl           sdk
+mips_24kc                     mips-unknown-linux-musl             sdk
+mips_4kec                     mips-unknown-linux-musl             sdk
+mips_mips32                   mips-unknown-linux-musl             sdk
+mips64_octeonplus             mips64-unknown-linux-muslabi64      sdk
+mips64el_mips64r2             mips64el-unknown-linux-muslabi64    sdk
+powerpc_464fp                 powerpc-unknown-linux-musl          sdk
+powerpc_8548                  powerpc-unknown-linux-musl          sdk

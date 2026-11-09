@@ -1,0 +1,35 @@
+#!/bin/sh /etc/rc.common
+# passwall2-rs server service wrapper (upstream: lua server_app.lua start|stop).
+
+START=99
+
+APP_BIN=${IPKG_INSTROOT}/usr/bin/passwall2
+
+boot_func() {
+	sleep 90
+	restart
+}
+
+boot() {
+	boot_func >/dev/null 2>&1 &
+}
+
+start() {
+	"$APP_BIN" server start
+}
+
+stop() {
+	[ -x "$APP_BIN" ] || return 0
+	"$APP_BIN" server stop
+}
+
+restart() {
+	stop
+	start
+}
+
+reload() {
+	echo "Warning: This service does not support configuration reloading"
+	echo "Performing full restart instead..."
+	restart
+}

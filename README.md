@@ -22,6 +22,11 @@ JavaScript views.
   balancing, server side, subscriptions, share links, geo rule updates, backup/restore,
   logs and component updates.
 * **Xray and sing-box** config generation, matching upstream option for option.
+* **Custom JSON nodes**: pick *Custom JSON* as an Xray or sing-box node's protocol and write
+  the outbound in the core's own JSON. You can also paste an array of outbounds or a whole
+  config; the first proxy outbound is used. Switching an existing node to Custom JSON opens the
+  outbound passwall would generate from its current form, ready to edit. Shunt rules,
+  balancing and chain proxies use these nodes like any other.
 * **No Lua at runtime**: one multicall binary, `/usr/bin/passwall2`, fully static (musl). It
   handles the service, the firewall, DNS, subscriptions and the rpcd backend
   (`luci.passwall2` ubus object).
@@ -174,6 +179,11 @@ License: GPL-3.0-only, the same as upstream PassWall 2.
   توزیع بار با HAProxy، بخش سرور، اشتراک‌ها (Subscription)، لینک‌های اشتراک‌گذاری، به‌روزرسانی
   قوانین geo، پشتیبان‌گیری و بازیابی، گزارش‌ها و به‌روزرسانی اجزا.
 * ساخت پیکربندی **Xray و sing-box**، گزینه به گزینه مطابق نسخهٔ اصلی.
+* **نود با JSON سفارشی**: برای نودهای Xray یا sing-box پروتکل *Custom JSON* را انتخاب کنید
+  و outbound را با فرمت JSON خود هسته بنویسید. آرایه‌ای از outboundها یا کل یک کانفیگ هم قابل
+  چسباندن است و اولین outbound پروکسی استفاده می‌شود. اگر نود موجودی را روی Custom JSON
+  بگذارید، outboundی که PassWall از فرم فعلی آن می‌سازد برای ویرایش باز می‌شود. قوانین تفکیک،
+  توزیع بار و پروکسی زنجیره‌ای با این نودها هم مثل بقیه کار می‌کنند.
 * **بدون Lua در زمان اجرا**: یک باینری چندکاره، `/usr/bin/passwall2`، کاملاً ایستا (musl). این
   باینری سرویس، فایروال، DNS، اشتراک‌ها و بک‌اند rpcd (شیء ubus با نام `luci.passwall2`) را
   اداره می‌کند.

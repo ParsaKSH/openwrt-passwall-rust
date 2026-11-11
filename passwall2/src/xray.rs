@@ -220,6 +220,10 @@ fn get_domain_excluded() -> Option<Vec<String>> {
     }
 }
 /// UCI section → Lua table.
+/// A UCI section as a generator node.
+pub fn node_of_section(s: &Section) -> Node {
+    node_of(s)
+}
 fn node_of(s: &Section) -> Node {
     match s.to_json() {
         Value::Object(m) => m,
@@ -381,6 +385,59 @@ fn wireguard_reserved(s: &str) -> Option<Vec<u32>> {
     } else {
         Some(bytes)
     }
+}
+
+// ====================================================================== custom JSON nodes
+
+/// Outbound of a `_json` node: the user's own outbound (see [`api::custom_outbound`]) with
+/// passwall's tag, chain dialer and the routing mark that keeps core traffic out of the proxy
+/// rules. An unusable JSON is logged and replaced by a blackhole so the rest of the config
+/// still starts.
+fn custom_json_outbound(node: &Node, node_id: Option<String>, flag: Option<&str>, proxy_tag: Option<String>, tag: Option<String>, dialer: Option<&str>) -> Value {
+    let mut o = match api::custom_outbound(&ns(node, "custom_json").unwrap_or_default(), "protocol") {
+        Ok(o) => Value::Object(o),
+        Err(e) => {
+            util::log(1, &format!("Node [{}] custom JSON: {}", ns(node, "remarks").unwrap_or_default(), e));
+            json!({ "protocol": "blackhole" })
+        }
+    };
+    o["_id"] = json!(node_id);
+    o["_flag"] = json!(flag);
+    o["_flag_proxy_tag"] = json!(proxy_tag);
+    o["tag"] = json!(tag);
+    if let Some(d) = dialer {
+        set_dialer(&mut o, d);
+    }
+    let direct_kind = matches!(vstr(&o, "protocol"), Some("blackhole" | "dns" | "loopback"));
+    if !direct_kind && vget(&o, "streamSettings").and_then(|s| vget(s, "sockopt")).and_then(|so| vget(so, "mark")).is_none() {
+        let ss = o.as_object_mut().unwrap().entry("streamSettings").or_insert_with(|| json!({}));
+        if !ss.is_object() {
+            *ss = json!({});
+        }
+        let so = ss.as_object_mut().unwrap().entry("sockopt").or_insert_with(|| json!({}));
+        if !so.is_object() {
+            *so = json!({});
+        }
+        so["mark"] = json!(255);
+    }
+    o
+}
+
+/// The outbound passwall generates for a (non-JSON) Xray node's options, without tag and
+/// internal fields: the starting point when the UI converts a node to custom JSON.
+pub fn node_outbound_json(node: &Node) -> Option<Value> {
+    let cfg = Config::parse("passwall2", "");
+    let mut g = Gen::new(&cfg, false);
+    let mut n = node.clone();
+    if !neq(&n, "type", "Xray") {
+        return None;
+    }
+    let mut o = g.gen_outbound(None, &mut n, Some(String::new()), None);
+    strip_internal(&mut o);
+    if let Some(m) = o.as_object_mut() {
+        m.remove("tag");
+    }
+    clean(o)
 }
 
 // ====================================================================== generator context
@@ -570,6 +627,14 @@ impl<'a> Gen<'a> {
             dialer_proxy_tag = proxy_tag.clone();
             node_in
         };
+
+        if neq(node, "protocol", api::JSON_PROTOCOL) {
+            let tag = match &remarks {
+                Some(r) => Some(format!("{}:{}", tag.unwrap_or_default(), r)),
+                None => tag,
+            };
+            return custom_json_outbound(node, node_id, flag, proxy_tag, tag, dialer_proxy_tag.as_deref());
+        }
 
         let is_xray = neq(node, "type", "Xray");
         if is_xray && neq(node, "tls", "1") {

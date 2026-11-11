@@ -748,3 +748,54 @@ config shunt_rules 'r3'
         assert_eq!(reorder_in(&mut s, " , "), 0);
     }
 }
+
+// ---------------------------------------------------------------- gen_node_json
+
+/// `gen_node_json {node}`: the outbound passwall builds for a node's (unsaved) form values, as
+/// pretty JSON — what the node editor puts into the textarea when the protocol is switched to
+/// Custom JSON. `node` is the section as an object (string / string-list values), or its JSON
+/// text. Nothing is read from or written to UCI.
+pub fn gen_node_json(p: &Params) -> Value {
+    let m = match p.raw("node") {
+        Some(Value::Object(m)) => m.clone(),
+        Some(Value::String(s)) => match serde_json::from_str::<Value>(s) {
+            Ok(Value::Object(m)) => m,
+            _ => return json!({"code": 0, "msg": "invalid node"}),
+        },
+        _ => return json!({"code": 0, "msg": "missing node"}),
+    };
+    let section = node_section(&m);
+    let typ = section.options.get("type").and_then(|v| match v {
+        crate::uci::Value::Single(s) => Some(s.clone()),
+        _ => None,
+    });
+    let out = match typ.as_deref() {
+        Some("Xray") => crate::xray::node_outbound_json(&crate::xray::node_of_section(&section)),
+        Some("sing-box") => crate::singbox::node_outbound_json(&crate::singbox::Node::from_section(&section)),
+        _ => None,
+    };
+    match out {
+        Some(v) => json!({"code": 1, "json": serde_json::to_string_pretty(&v).unwrap_or_default()}),
+        None => json!({"code": 0, "msg": "this node cannot be converted to JSON"}),
+    }
+}
+
+/// A `nodes` section built from a JSON object (`.name` kept, other dot keys dropped).
+fn node_section(m: &Map<String, Value>) -> crate::uci::Section {
+    let mut options = indexmap::IndexMap::new();
+    for (k, v) in m {
+        if k.starts_with('.') || !is_sid(k) {
+            continue;
+        }
+        let val = match v {
+            Value::String(s) => crate::uci::Value::Single(s.clone()),
+            Value::Number(n) => crate::uci::Value::Single(n.to_string()),
+            Value::Bool(b) => crate::uci::Value::Single(if *b { "1" } else { "0" }.into()),
+            Value::Array(a) => crate::uci::Value::List(a.iter().map(|x| x.as_str().map(|s| s.to_string()).unwrap_or_else(|| x.to_string())).collect()),
+            _ => continue,
+        };
+        options.insert(k.clone(), val);
+    }
+    let name = m.get(".name").and_then(|v| v.as_str()).filter(|s| is_sid(s)).unwrap_or("node").to_string();
+    crate::uci::Section { name, stype: "nodes".into(), anonymous: false, index: 0, options }
+}

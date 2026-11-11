@@ -78,6 +78,13 @@ it privately in your module (don't edit others' files).
 * No async runtime. Use std threads where concurrency is needed. HTTP downloads use `curl`
   (dependency of the package, like upstream) via `api.rs` helpers.
 * Unit tests (`#[cfg(test)]`) for parsers/generators; run with `scripts/vm.sh 'cargo test'`.
+* Custom-JSON nodes (`protocol '_json'`, Xray or sing-box): option `custom_json` holds the outbound
+  (base64 of the JSON text as the UI writes it, or plain JSON). `api::custom_outbound` picks the
+  outbound (object / array / whole config → first proxy outbound); the generators' `gen_outbound`
+  return it with passwall's tag, `_flag*` fields, chain dialer/detour, and for Xray
+  `sockopt.mark 255` when unset. Invalid JSON is logged and becomes a blackhole/block outbound.
+  `gen_node_json {node}` (rpc) renders a regular node's unsaved form values as outbound JSON
+  for the editor's form → JSON switch.
 
 ## rpcd contract (`luci.passwall2` ubus object) — backend `rpc.rs` ⇄ frontend JS
 * `passwall2 rpc list` prints `{ "<method>": { "<param>": "<example type>" , ...}, ... }`.

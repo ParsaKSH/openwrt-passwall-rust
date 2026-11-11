@@ -1757,6 +1757,57 @@ pub fn urltest_node(id: &str) -> Option<String> {
 
 const SPECIAL_PROTOCOLS: [&str; 4] = ["_balancing", "_shunt", "_iface", "_urltest"];
 
+/// Protocol of a node whose outbound is the user's own JSON (option `custom_json`).
+pub const JSON_PROTOCOL: &str = "_json";
+
+/// Outbound types that never carry proxy traffic; skipped when a whole config is pasted.
+const NON_PROXY_OUTBOUNDS: [&str; 9] = ["freedom", "blackhole", "dns", "loopback", "direct", "block", "selector", "urltest", "dns-out"];
+
+/// Decode a `custom_json` value (base64 of the JSON text, as the UI stores it, or plain JSON
+/// written with `uci`) and pick the outbound it describes: a single outbound object, an array of
+/// outbounds, or a whole core config (`outbounds` / sing-box `endpoints`). From a list the first
+/// outbound that carries proxy traffic is used. `key` is the type field (`protocol` for Xray,
+/// `type` for sing-box).
+pub fn custom_outbound(text: &str, key: &str) -> Result<serde_json::Map<String, Value>, String> {
+    let t = text.trim();
+    if t.is_empty() {
+        return Err("empty custom JSON".into());
+    }
+    let decoded;
+    let src = if t.starts_with('{') || t.starts_with('[') {
+        t
+    } else {
+        decoded = base64_decode(t);
+        decoded.as_str()
+    };
+    let v: Value = serde_json::from_str(src.trim()).map_err(|e| format!("invalid custom JSON: {}", e))?;
+    let pick = |list: &[Value]| -> Option<serde_json::Map<String, Value>> {
+        let objs = || list.iter().filter_map(|o| o.as_object());
+        objs()
+            .find(|o| o.get(key).and_then(|x| x.as_str()).is_some_and(|p| !NON_PROXY_OUTBOUNDS.contains(&p)))
+            .or_else(|| objs().next())
+            .cloned()
+    };
+    let found = match &v {
+        Value::Array(a) => pick(a),
+        Value::Object(o) if o.contains_key(key) => Some(o.clone()),
+        Value::Object(o) => {
+            let mut all: Vec<Value> = vec![];
+            for k in ["outbounds", "endpoints"] {
+                if let Some(Value::Array(a)) = o.get(k) {
+                    all.extend(a.iter().cloned());
+                }
+            }
+            pick(&all)
+        }
+        _ => None,
+    };
+    match found {
+        Some(o) if o.get(key).and_then(|x| x.as_str()).is_some_and(|p| !p.is_empty()) => Ok(o),
+        _ => Err(format!("custom JSON has no outbound with a \"{}\" field", key)),
+    }
+}
+
 /// `api.is_normal_node(e)`: false iff the node has a type and a special protocol
 /// (`_balancing`, `_shunt`, `_iface`, `_urltest`).
 pub fn is_normal_node(e: &Section) -> bool {
@@ -1784,6 +1835,7 @@ pub fn protocol_display(p: &str) -> String {
         "hysteria2" => "HY2".into(),
         "anytls" => "AnyTLS".into(),
         "ssh" => "SSH".into(),
+        JSON_PROTOCOL => "JSON".into(),
         o => {
             let mut c = o.chars();
             match c.next() {
@@ -1849,10 +1901,15 @@ pub fn get_valid_nodes(cfg: &Config) -> Vec<ValidNode> {
         if let Some(p) = proto.as_deref().filter(|p| SPECIAL_PROTOCOLS.contains(p)) {
             entries.push((trim(&format!("{} {}：[{}]", tn, translate(p), remarks)), "special"));
         }
+        // a custom-JSON node has no address/port options of its own (stale ones are ignored)
+        let is_json = proto.as_deref() == Some(JSON_PROTOCOL) && (t == "sing-box" || t == "Xray");
+        if is_json {
+            entries.push((trim(&format!("{} JSON：[{}]", tn, remarks)), "normal"));
+        }
         let port = e.get("port").or_else(|| e.get("hysteria_hop")).or_else(|| e.get("hysteria2_hop"));
         let is_realm = proto.as_deref() == Some("hysteria2") && e.get("hysteria2_realms").is_some();
         let address = e.get("address");
-        if (port.is_some() && address.is_some()) || is_realm {
+        if !is_json && ((port.is_some() && address.is_some()) || is_realm) {
             let mut addr = address.clone().unwrap_or_default();
             if is_ip(&addr) || dt_hostname(&addr) || is_realm {
                 let mut type_name = tn.clone();

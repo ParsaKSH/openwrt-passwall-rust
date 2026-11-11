@@ -21,6 +21,40 @@ use std::sync::OnceLock;
 
 type M = Map<String, Value>;
 
+/// Outbound of a `_json` node: the user's own outbound (see [`api::custom_outbound`]) with
+/// passwall's tag and chain detour; an unusable JSON is logged and becomes a `block` outbound.
+fn custom_json_outbound(node: &Node, node_id: Option<&str>, flag: Option<&str>, proxy_tag: Option<&str>, tag: &str) -> M {
+    let mut o = match api::custom_outbound(node.g("custom_json").unwrap_or(""), "type") {
+        Ok(o) => o,
+        Err(e) => {
+            util::log(1, &format!("Node [{}] custom JSON: {}", node.g("remarks").unwrap_or(""), e));
+            obj(vec![("type", sv("block"))])
+        }
+    };
+    o.insert("_id".into(), ov(node_id).unwrap_or(Value::Null));
+    o.insert("_flag".into(), ov(flag).unwrap_or(Value::Null));
+    o.insert("_flag_proxy_tag".into(), ov(proxy_tag).unwrap_or(Value::Null));
+    o.insert("tag".into(), Value::String(tag.to_string()));
+    if let Some(d) = node.g("detour") {
+        o.insert("detour".into(), Value::String(d.to_string()));
+    }
+    o
+}
+
+/// The outbound passwall generates for a (non-JSON) sing-box node's options, without tag and
+/// internal fields: the starting point when the UI converts a node to custom JSON.
+pub fn node_outbound_json(node: &Node) -> Option<Value> {
+    if !node.is("type", "sing-box") {
+        return None;
+    }
+    let mut g = Gen::new(Config::parse("passwall2", ""), Versions::detect());
+    g.fx = false;
+    g.no_run = true;
+    let mut o = g.gen_outbound(None, Some(node.clone()), Some(""), None)?;
+    o.retain(|k, _| !k.starts_with('_') && k != "tag");
+    api::clean_empty_tables(Value::Object(o))
+}
+
 /// `GEO_VAR.TO_SRS_PATH` (trailing slash).
 pub const TO_SRS_PATH: &str = "/tmp/etc/passwall2_tmp/singbox_srss/";
 const CACHE_PATH: &str = api::CACHE_PATH;
@@ -588,6 +622,10 @@ impl Gen {
             Some(r) => format!("{}:{}", tag.unwrap_or_default(), r),
             None => tag.unwrap_or_default(),
         };
+
+        if node.is("protocol", api::JSON_PROTOCOL) {
+            return Some(custom_json_outbound(&node, node_id.as_deref(), flag, proxy_tag.as_deref(), &tag));
+        }
 
         let address = node.g("address").unwrap_or("").to_lowercase();
         node.set("address", &address);
@@ -2171,6 +2209,10 @@ impl Gen {
         while i > 0 {
             i -= 1;
             match outbounds[i].get("type").and_then(|v| v.as_str()) {
+                // a custom-JSON node may already be a (1.11+) wireguard endpoint
+                Some("wireguard") if outbounds[i].contains_key("peers") => {
+                    endpoints.push(Value::Object(outbounds.remove(i)));
+                }
                 Some("wireguard") => {
                     let v = outbounds.remove(i);
                     let g = |k: &str| v.get(k).cloned();
@@ -3212,4 +3254,37 @@ config user 'wg'
         assert_eq!(ep["peers"][0]["allowed_ips"], json!([]));
         assert_eq!(c["route"]["rules"][0], json!({"ip_is_private":true,"action":"reject"}));
     }
+
+    #[test]
+    fn custom_json_node() {
+        let full = r#"{"outbounds":[{"type":"direct","tag":"direct"},{"type":"vless","tag":"x","server":"j.example.com","server_port":443,"uuid":"u"}]}"#;
+        let mut g = gen("", V112);
+        let n = node(&[(".name", "j1"), ("type", "sing-box"), ("protocol", "_json"), ("remarks", "J"), ("custom_json", full)]);
+        let o = Value::Object(g.gen_outbound(Some("f"), Some(n), Some("default"), None).unwrap());
+        assert_eq!(o["type"], "vless");
+        assert_eq!(o["tag"], "default:J");
+        assert_eq!(o["server"], "j.example.com");
+        // invalid → block
+        let n = node(&[(".name", "j2"), ("type", "sing-box"), ("protocol", "_json"), ("remarks", "K"), ("custom_json", "{bad")]);
+        let o = Value::Object(g.gen_outbound(None, Some(n), None, None).unwrap());
+        assert_eq!(o["type"], "block");
+        // node → JSON
+        let n = node(&[(".name", "v"), ("type", "sing-box"), ("protocol", "socks"), ("remarks", "S"), ("address", "2.2.2.2"), ("port", "1080")]);
+        let j = node_outbound_json(&n).unwrap();
+        assert_eq!(j["type"], "socks");
+        assert_eq!(j["server_port"], 1080);
+        assert!(j.get("tag").is_none() && j.get("_id").is_none());
+    }
+
+    #[test]
+    fn custom_json_wireguard_endpoint_kept() {
+        let ep = r#"{"type":"wireguard","tag":"w","address":["10.0.0.2/32"],"private_key":"k","peers":[{"address":"1.1.1.1","port":51820,"public_key":"p","allowed_ips":["0.0.0.0/0"]}]}"#;
+        let conf = format!("config nodes 'w1'\n\toption type 'sing-box'\n\toption protocol '_json'\n\toption remarks 'W'\n\toption custom_json '{}'\n", api::base64_encode(ep.as_bytes()));
+        let mut g = gen(&conf, V112);
+        let c = g.gen_config(&args(json!({"flag": "global", "node": "w1", "local_socks_port": "1070"}))).config;
+        let e = &c["endpoints"][0];
+        assert_eq!(e["tag"], "default:W", "{c:#}");
+        assert_eq!(e["peers"][0]["public_key"], "p");
+    }
+
 }

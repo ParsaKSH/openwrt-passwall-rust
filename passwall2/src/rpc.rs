@@ -101,6 +101,7 @@ pub static METHODS: &[Method] = &[
     m!("delete_select_nodes", "ids" => S, "redirect" => S),
     m!("reassign_group", "ids" => S, "group" => S),
     m!("get_node", "id" => S),
+    m!("gen_node_json", "node" => S),
     m!("save_node_list_opt", "option" => S, "value" => S),
     // ---- rules
     m!("update_rules", "update" => S),
@@ -304,6 +305,7 @@ pub fn call_sync(method: &str, p: &Params) -> Option<Value> {
         "delete_select_nodes" => nodes::delete_select_nodes(p),
         "reassign_group" => nodes::reassign_group(p),
         "get_node" => nodes::get_node(p),
+        "gen_node_json" => nodes::gen_node_json(p),
         "save_node_list_opt" => nodes::save_node_list_opt(p),
         "update_rules" => system::update_rules(p),
         "rollback_rules" => system::rollback_rules(p),

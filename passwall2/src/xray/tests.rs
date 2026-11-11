@@ -513,3 +513,66 @@ fn server_reality_lists_always_arrays() {
     assert_eq!(r["serverNames"], json!(["one.com"]));
     assert_eq!(r["shortIds"], json!([""]));
 }
+
+// ---------------------------------------------------------------- custom JSON nodes
+
+const JSON_OB: &str = r#"{"tag":"mine","protocol":"vless","settings":{"address":"j.example.com","port":443,"id":"u","encryption":"none"},"streamSettings":{"network":"ws","wsSettings":{"path":"/p"}}}"#;
+
+fn json_conf(custom: &str) -> String {
+    format!(
+        "config nodes 'j1'\n\toption remarks 'J'\n\toption type 'Xray'\n\toption protocol '_json'\n\toption custom_json '{custom}'\n\
+         \toption address 'stale.example.com'\n\toption port '1'\n\
+         config nodes 'n2'\n\toption remarks 'P'\n\toption type 'Xray'\n\toption protocol 'socks'\n\toption address '2.2.2.2'\n\toption port '1080'\n"
+    )
+}
+
+#[test]
+fn custom_json_outbound_base64_and_plain() {
+    for custom in [b64(JSON_OB), JSON_OB.replace('\'', "")] {
+        let c = gen(&json_conf(&custom), &[("flag", "global"), ("node", "j1"), ("no_run", "1"), ("redir_port", "1041"), ("tcp_proxy_way", "redirect")]);
+        let o = &c["outbounds"][0];
+        assert_eq!(o["protocol"], "vless", "{c:#}");
+        assert_eq!(o["tag"], "default:J");
+        assert_eq!(o["settings"]["address"], "j.example.com");
+        assert_eq!(o["streamSettings"]["wsSettings"]["path"], "/p");
+        // routing mark added so core traffic is not re-proxied
+        assert_eq!(o["streamSettings"]["sockopt"]["mark"], 255);
+        assert!(o.as_object().unwrap().keys().all(|k| !k.starts_with('_')));
+    }
+}
+
+#[test]
+fn custom_json_full_config_and_chain() {
+    let full = format!(r#"{{"inbounds":[],"outbounds":[{{"protocol":"freedom","tag":"direct"}},{JSON_OB}]}}"#);
+    let conf = json_conf(&b64(&full)).replace("option port '1'\n", "option port '1'\n\toption chain_proxy '1'\n\toption preproxy_node 'n2'\n");
+    let c = gen(&conf, &[("flag", "global"), ("node", "j1"), ("no_run", "1"), ("redir_port", "1041"), ("tcp_proxy_way", "redirect")]);
+    let o = outbound(&c, "n2:P -> default:J");
+    assert_eq!(o["protocol"], "vless");
+    let d = o["streamSettings"]["sockopt"]["dialerProxy"].as_str().unwrap_or_default();
+    assert!(d.contains("n2"), "dialer {d}: {c:#}");
+}
+
+#[test]
+fn custom_json_invalid_is_blackhole() {
+    let c = gen(&json_conf(&b64("{not json")), &[("flag", "global"), ("node", "j1"), ("no_run", "1"), ("redir_port", "1041"), ("tcp_proxy_way", "redirect")]);
+    let o = outbound(&c, "default:J");
+    assert_eq!(o["protocol"], "blackhole");
+}
+
+#[test]
+fn node_to_json_roundtrip() {
+    let conf = "config nodes 'v1'\n\toption remarks 'V'\n\toption type 'Xray'\n\toption protocol 'vless'\n\toption address 'v.example.com'\n\
+                \toption port '443'\n\toption uuid 'u'\n\toption encryption 'none'\n\toption transport 'ws'\n\toption ws_path '/w'\n";
+    let n = node_table(conf, "v1");
+    let j = node_outbound_json(&n).unwrap();
+    assert!(j.get("tag").is_none());
+    assert!(j.as_object().unwrap().keys().all(|k| !k.starts_with('_')));
+    assert_eq!(j["protocol"], "vless");
+    // feeding it back as a custom JSON node yields the same outbound (plus tag)
+    let back = gen(&json_conf(&b64(&j.to_string())), &[("flag", "global"), ("node", "j1"), ("no_run", "1"), ("redir_port", "1041"), ("tcp_proxy_way", "redirect")]);
+    let mut o = outbound(&back, "default:J").clone();
+    o.as_object_mut().unwrap().remove("tag");
+    let mut want = j.clone();
+    want["streamSettings"]["sockopt"]["mark"] = json!(255);
+    assert_eq!(o, want);
+}

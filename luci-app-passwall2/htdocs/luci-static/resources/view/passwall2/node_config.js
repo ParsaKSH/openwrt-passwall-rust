@@ -182,7 +182,11 @@ return view.extend({
 			this.ctx = ctx;
 			this.specs = nf.getSpecs(type, ctx);
 			nf.buildForm(s, this.specs, ctx, {
-				onKindChange: function(newProtocol) { self.rebuild({ protocol: newProtocol }); },
+				onKindChange: function(newProtocol, prevProtocol) {
+					if (newProtocol == '_json' && self.kind == 'normal')
+						return self.convertToJson(prevProtocol);
+					self.rebuild({ protocol: newProtocol });
+				},
 				onShuntGroupChange: function(v) { self.rebuild({ shunt_group: v }); }
 			});
 		}
@@ -218,6 +222,28 @@ return view.extend({
 			else uci.set(CONF, sid, k, v);
 		});
 		return this.renderMap();
+	},
+
+	/* Protocol switched from a regular one to Custom JSON: ask the backend for the outbound it
+	 * would generate from the current (unsaved) form and open it in the JSON editor. The old
+	 * options stay in UCI, so switching back restores the form. */
+	convertToJson: function(prevProtocol) {
+		var self = this, sid = this.sid;
+		var node = nf.collectFormValues(this.section, sid, { protocol: prevProtocol });
+		node['.name'] = sid;
+		node.type = this.currentType();
+		node.protocol = prevProtocol;
+		return pw.call('gen_node_json', { node: JSON.stringify(node) }).then(function(res) {
+			var changes = { protocol: '_json' };
+			if (res && res.code === 1 && res.json)
+				changes.custom_json = nf.encodeJsonText(res.json);
+			else
+				ui.addNotification(null, E('p', {}, [_('Could not convert this node to JSON; starting from an empty editor.') + (res && res.msg ? ' (' + res.msg + ')' : '')]), 'warning');
+			return self.rebuild(changes);
+		}).catch(function(e) {
+			ui.addNotification(null, E('p', {}, [_('Error') + ': ' + (e && e.message || e)]), 'danger');
+			return self.rebuild({ protocol: '_json' });
+		});
 	},
 
 	setStatus: function(text, kind) {

@@ -19,6 +19,7 @@
 					"server_get_log",
 					"gen_client_config",
 					"get_node",
+					"gen_node_json",
 					"get_shunt_rules",
 					"geo_view",
 					"com_check",

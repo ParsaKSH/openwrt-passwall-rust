@@ -2624,3 +2624,6 @@ msgstr "注意：自动尝试提取 Clash 订阅中的节点 DNS，禁用则不�
 
 msgid "Never expires"
 msgstr "长期有效"
+
+msgid "Custom JSON"
+msgstr "自定义 JSON"

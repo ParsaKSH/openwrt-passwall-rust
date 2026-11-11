@@ -2630,3 +2630,6 @@ msgstr "注意：自動嘗試擷取 Clash 訂閱中的節點 DNS，停用則不�
 
 msgid "Never expires"
 msgstr "長期有效"
+
+msgid "Custom JSON"
+msgstr "自定义 JSON"

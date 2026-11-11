@@ -1158,6 +1158,11 @@ pub fn run_socks(ctx: &Ctx, cfg: &Config, a: &Args) -> i32 {
     let remarks = cfg.s(&node, "remarks");
     let mut server_host = cfg.s(&node, "address");
     let mut server_port = cfg.s(&node, "port");
+    if cfg.s(&node, "protocol") == api::JSON_PROTOCOL {
+        // the server is inside custom_json; leftovers of a converted node must not be used
+        server_host.clear();
+        server_port.clear();
+    }
     if !relay_port.is_empty() {
         server_host = "127.0.0.1".into();
         server_port = relay_port.clone();
@@ -1173,7 +1178,7 @@ pub fn run_socks(ctx: &Ctx, cfg: &Config, a: &Args) -> i32 {
     } else {
         error_msg = Some(i18n("For some reason, the configuration for this Socks service has been lost, and its startup has been aborted!", &[]));
     }
-    if (typ == "sing-box" || typ == "xray") && ["_balancing", "_shunt", "_iface", "_urltest"].contains(&cfg.s(&node, "protocol").as_str()) {
+    if (typ == "sing-box" || typ == "xray") && ["_balancing", "_shunt", "_iface", "_urltest", api::JSON_PROTOCOL].contains(&cfg.s(&node, "protocol").as_str()) {
         error_msg = None;
     }
     if error_msg.is_some() && (!cfg.s(&node, "hysteria_hop").is_empty() || !cfg.s(&node, "hysteria2_hop").is_empty() || cfg.s(&node, "hysteria2_realms") == "1") {

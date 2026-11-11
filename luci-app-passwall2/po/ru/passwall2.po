@@ -2639,3 +2639,6 @@ msgstr "Примечание: в режиме «Авто» выполняетс�
 
 msgid "Never expires"
 msgstr "Бессрочно"
+
+msgid "Custom JSON"
+msgstr "Пользовательский JSON"

@@ -422,6 +422,7 @@ function protoLabel(p) {
 	case 'hysteria2': return 'HY2';
 	case 'anytls': return 'AnyTLS';
 	case 'ssh': return 'SSH';
+	case '_json': return 'JSON';
 	default: return p ? p.charAt(0).toUpperCase() + p.slice(1) : '';
 	}
 }
@@ -440,6 +441,13 @@ function getValidNodes() {
 			e.remark = trim(type_name + ' ' + _(e.protocol) + '：[' + e.remarks + ']');
 			e.node_type = 'special';
 			push(e);
+		}
+		if (e.protocol == '_json' && (e.type == 'sing-box' || e.type == 'Xray')) {
+			/* custom-JSON node: no address/port of its own */
+			e.remark = trim(type_name + ' JSON：[' + e.remarks + ']');
+			e.node_type = 'normal';
+			push(e);
+			return;
 		}
 		var port = e.port || e.hysteria_hop || e.hysteria2_hop;
 		var is_realm = e.protocol == 'hysteria2' && e.hysteria2_realms;
@@ -488,7 +496,9 @@ function addChain(S, ctx, special) {
 	o.value('', _('Close(Not use)'));
 	if (!special) {
 		o.value('1', _('Preproxy Node'));
-		o.value('3', _('Outbound Interface'));
+		/* a custom-JSON outbound sets its own sockopt.interface */
+		if (ctx.kind != '_json')
+			o.value('3', _('Outbound Interface'));
 	}
 	o.value('2', _('Landing Node'));
 
@@ -644,6 +654,81 @@ function addHy2Common(S, realmDeps) {
 	o.depends({ protocol: 'hysteria2' });
 }
 
+/* Type field of an outbound in each core's JSON. */
+var JSON_TYPE_KEY = { 'Xray': 'protocol', 'sing-box': 'type' };
+var NON_PROXY_OUTBOUNDS = ['freedom', 'blackhole', 'dns', 'loopback', 'direct', 'block', 'selector', 'urltest', 'dns-out'];
+
+/* Mirror of api::custom_outbound(): the outbound a custom JSON describes (object, array of
+ * outbounds or whole config; first proxy outbound wins), or an error string. */
+function pickCustomOutbound(text, core) {
+	var key = JSON_TYPE_KEY[core] || 'type', v;
+	try { v = JSON.parse(trim(text)); } catch (e) { return _('Must be JSON text!') + ' (' + e.message + ')'; }
+	var isObj = function(o) { return o !== null && typeof o === 'object' && !Array.isArray(o); };
+	var pick = function(list) {
+		var objs = list.filter(isObj);
+		return objs.filter(function(o) { return typeof o[key] === 'string' && NON_PROXY_OUTBOUNDS.indexOf(o[key]) < 0; })[0] || objs[0];
+	};
+	var found = null;
+	if (Array.isArray(v)) found = pick(v);
+	else if (isObj(v) && key in v) found = v;
+	else if (isObj(v)) found = pick([].concat(Array.isArray(v.outbounds) ? v.outbounds : [], Array.isArray(v.endpoints) ? v.endpoints : []));
+	if (!found || typeof found[key] !== 'string' || found[key] === '')
+		return _('No outbound with a "%s" field was found.').format(key);
+	return found;
+}
+
+function addCustomJson(S, core) {
+	var doc = core == 'Xray' ? 'https://xtls.github.io/config/outbound.html'
+		: 'https://sing-box.sagernet.org/configuration/outbound/';
+	var o = S.add('TextValue', 'custom_json', _('Custom JSON'),
+		_('The outbound in %s\'s own JSON format, handed to the core as written. Passwall only sets its tag, the chain proxy and the routing mark. An array of outbounds or a whole config is also accepted: the first proxy outbound is used.').format(core == 'Xray' ? 'Xray' : 'Sing-Box') +
+		' <a target="_blank" href="' + doc + '">' + _('document') + '</a>');
+	o.depends({ protocol: '_json' });
+	o.set({ rows: 24, wrap: 'off', enc: 'b64json', rmempty: false, validate: function(v) {
+		var r = pickCustomOutbound(normJsonText(v), core);
+		return typeof r === 'string' ? r : true;
+	} });
+}
+
+/* The node as UCI would hold it after saving the current (unsaved) form, with `overrides`
+ * applied to the form values first (e.g. the protocol before a kind switch). Which fields count
+ * is decided from the specs' dependencies, not from what is on screen: by the time a protocol
+ * select's onchange runs LuCI has already hidden the old protocol's fields. */
+function collectFormValues(s, sid, overrides) {
+	var out = Object.assign({}, uci.get(CONF, sid) || {});
+	var opts = s.children.filter(function(o) { return o.pwspec && o.option; });
+	var cur = {}, active = {};
+	opts.forEach(function(o) {
+		cur[o.option] = (overrides && o.option in overrides) ? overrides[o.option] : o.formvalue(sid);
+	});
+	var lookup = function(k) {
+		if (!active[k]) return '';
+		var v = cur[k];
+		if (Array.isArray(v)) return v.join(' ');
+		return v == null ? '' : String(v);
+	};
+	for (var pass = 0; pass < 12; pass++) {
+		var changed = false;
+		opts.forEach(function(o) {
+			var a = depsSatisfied(o.pwspec.deps, lookup);
+			if (active[o.option] !== a) { active[o.option] = a; changed = true; }
+		});
+		if (!changed) break;
+	}
+	opts.forEach(function(o) {
+		var sp = o.pwspec, v = cur[o.option];
+		if (!active[o.option]) { delete out[o.option]; return; }
+		if (sp.cls == 'Flag') v = (v == '1' || v === true) ? '1' : '0';
+		else if (sp.cls == 'DynamicList' || sp.cls == 'NodeMulti') v = dedup(toArray(v));
+		else if (sp.cls == 'CheckList') v = dedup(toArray(v)).join(' ');
+		else if (sp.enc && ENC[sp.enc] && sp.enc != 'plugin' && v != null && v !== '') v = ENC[sp.enc].encode(v);
+		if (v == null || v === '' || (Array.isArray(v) && !v.length)) delete out[o.option];
+		else out[o.option] = v;
+	});
+	if (overrides) Object.keys(overrides).forEach(function(k) { if (!(k in cur)) out[k] = overrides[k]; });
+	return out;
+}
+
 function addFinalMaskText(S) {
 	var o = S.add('TextValue', 'finalmask', '　', _('An FinalMaskObject in JSON format, used for sharing.') + '<br>' +
 		_('Custom finalmask overrides mkcp, hysteria2, fragment, noise, and related settings.'));
@@ -695,6 +780,7 @@ function xraySpecs(S, ctx) {
 	o.value('wireguard', _('WireGuard'));
 	o.value('hysteria2', _('Hysteria2'));
 	o.value('masque', 'MASQUE');
+	o.value('_json', _('Custom JSON'));
 	o.value('_balancing', _('Balancing'));
 	o.value('_shunt', _('Shunt'));
 	o.value('_iface', _('Custom Interface'));
@@ -776,6 +862,9 @@ function xraySpecs(S, ctx) {
 		o.depends({ protocol: '_iface' });
 		ctx.env.netdevs.forEach(function(d) { o.value(d.name, d.label); });
 	}
+
+	if (kind == '_json')
+		addCustomJson(S, 'Xray');
 
 	if (kind == 'normal') {
 		S.add('Value', 'address', _('Address (Support Domain Name)'));
@@ -989,6 +1078,7 @@ function singboxSpecs(S, ctx) {
 	if (tag('with_naive_outbound')) o.value('naive', 'NaïveProxy');
 	if (env.ge114) o.value('snell', 'Snell');
 	if (env.ge115 && tag('with_quic')) o.value('masque', 'MASQUE');
+	o.value('_json', _('Custom JSON'));
 	o.value('_urltest', _('URLTest'));
 	o.value('_shunt', _('Shunt'));
 	o.value('_iface', _('Custom Interface'));
@@ -1027,6 +1117,9 @@ function singboxSpecs(S, ctx) {
 		o.depends({ protocol: '_iface' });
 		env.netdevs.forEach(function(d) { o.value(d.name, d.label); });
 	}
+
+	if (kind == '_json')
+		addCustomJson(S, 'sing-box');
 
 	if (kind == 'normal') {
 		S.add('Value', 'address', _('Address (Support Domain Name)'));
@@ -1380,6 +1473,7 @@ function protocolKind(type, protocol) {
 	if (type == 'sing-box' && protocol == '_urltest') return '_urltest';
 	if (protocol == '_shunt') return '_shunt';
 	if (protocol == '_iface') return '_iface';
+	if (protocol == '_json') return '_json';
 	return 'normal';
 }
 
@@ -1892,10 +1986,12 @@ function buildForm(s, S, ctx, hooks) {
 				uci.unset(CONF, section_id, 'download_address');
 		};
 		if (sp.kindSwitch && hooks.onKindChange) {
+			var prevProto = uci.get(CONF, ctx.sid, 'protocol') || sp.default || (sp.values[0] && sp.values[0][0]);
 			o.onchange = function(ev, section_id, value) {
-				var oldKind = ctx.kind;
+				var oldKind = ctx.kind, prev = prevProto;
 				var newKind = protocolKind(ctx.type, value);
-				if (newKind != oldKind) hooks.onKindChange(value);
+				prevProto = value;
+				if (newKind != oldKind) hooks.onKindChange(value, prev);
 			};
 		}
 		if (sp.shuntGroupSwitch && hooks.onShuntGroupChange) {
@@ -2044,6 +2140,19 @@ function selfTest() {
 	eq('xray.preproxy.self', S.get('preproxy_node').values.map(function(v) { return v[0]; }), ['n1']);
 	eq('kind', [protocolKind('Xray', '_urltest'), protocolKind('sing-box', '_urltest'), protocolKind('Xray', '_balancing'), protocolKind('SSR', '_shunt')],
 		['normal', '_urltest', '_balancing', 'normal']);
+
+	/* custom JSON */
+	eq('json.kind', [protocolKind('Xray', '_json'), protocolKind('sing-box', '_json'), protocolKind('SSR', '_json')], ['_json', '_json', 'normal']);
+	S = getSpecs('Xray', Object.assign(ctx('_json'), { type: 'Xray' }));
+	eq('json.xray.specs', [!!S.get('custom_json'), !!S.get('address'), S.get('chain_proxy').values.map(function(v) { return v[0]; })], [true, false, ['', '1', '2']]);
+	eq('json.xray.listed', S.get('protocol').values.some(function(v) { return v[0] == '_json'; }), true);
+	S = getSpecs('sing-box', Object.assign(ctx('_json'), { type: 'sing-box' }));
+	eq('json.sb.specs', [!!S.get('custom_json'), !!S.get('server')], [true, false]);
+	eq('json.pick.obj', pickCustomOutbound('{"protocol":"vless"}', 'Xray').protocol, 'vless');
+	eq('json.pick.full', pickCustomOutbound('{"outbounds":[{"protocol":"freedom"},{"protocol":"trojan"}]}', 'Xray').protocol, 'trojan');
+	eq('json.pick.sbarr', pickCustomOutbound('[{"type":"direct"},{"type":"hysteria2"}]', 'sing-box').type, 'hysteria2');
+	eq('json.pick.ep', pickCustomOutbound('{"endpoints":[{"type":"wireguard","peers":[]}]}', 'sing-box').type, 'wireguard');
+	eq('json.pick.bad', [typeof pickCustomOutbound('{x', 'Xray'), typeof pickCustomOutbound('{"type":"vless"}', 'Xray')], ['string', 'string']);
 	return fails;
 }
 
@@ -2064,6 +2173,9 @@ return baseclass.extend({
 	installDependsHandler: installDependsHandler,
 	applyFields: applyFields,
 	formGetter: formGetter,
+	collectFormValues: collectFormValues,
+	pickCustomOutbound: pickCustomOutbound,
+	encodeJsonText: function(v) { return ENC.b64json.encode(v); },
 	urlEncode: urlEncode,
 	isIPv6: isIPv6,
 	isIP: isIP,

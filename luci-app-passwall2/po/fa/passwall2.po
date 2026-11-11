@@ -2809,3 +2809,18 @@ msgstr "بومی (native)"
 
 msgid "none"
 msgstr "هیچ‌کدام"
+
+msgid "Custom JSON"
+msgstr "JSON سفارشی"
+
+msgid "document"
+msgstr "مستندات"
+
+msgid "No outbound with a \"%s\" field was found."
+msgstr "هیچ outbound با فیلد «%s» پیدا نشد."
+
+msgid "The outbound in %s's own JSON format, handed to the core as written. Passwall only sets its tag, the chain proxy and the routing mark. An array of outbounds or a whole config is also accepted: the first proxy outbound is used."
+msgstr "outbound با فرمت JSON خود %s که همان‌طور که نوشته شده به هسته داده می‌شود. PassWall فقط tag، پروکسی زنجیره‌ای و routing mark آن را تنظیم می‌کند. آرایه‌ای از outboundها یا یک کانفیگ کامل هم پذیرفته می‌شود و اولین outbound پروکسی استفاده می‌شود."
+
+msgid "Could not convert this node to JSON; starting from an empty editor."
+msgstr "تبدیل این نود به JSON ممکن نشد؛ ویرایشگر خالی باز می‌شود."

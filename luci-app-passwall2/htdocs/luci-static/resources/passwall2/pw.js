@@ -536,6 +536,7 @@ function protocolLabel(protocol) {
 	case 'hysteria2': return 'HY2';
 	case 'anytls': return 'AnyTLS';
 	case 'ssh': return 'SSH';
+	case '_json': return 'JSON';
 	default:
 		return String(protocol || '').replace(/^[a-z]/, (c) => c.toUpperCase());
 	}
@@ -576,6 +577,13 @@ function classifyNode(s, info) {
 		res.valid = true;
 		res.node_type = 'special';
 		res.label = trim('%s：[%s]'.format(tn + ' ' + _(s.protocol), s.remarks));
+		return res;
+	}
+	if (s.protocol === '_json' && (s.type === 'sing-box' || s.type === 'Xray')) {
+		/* custom-JSON node: the server lives inside custom_json; stale address/port are ignored */
+		res.valid = true;
+		res.node_type = 'normal';
+		res.label = trim('%s：[%s]'.format(tn + ' JSON', s.remarks));
 		return res;
 	}
 	let port = s.port || s.hysteria_hop || s.hysteria2_hop;

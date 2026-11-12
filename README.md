@@ -27,6 +27,12 @@ JavaScript views.
   config; the first proxy outbound is used. Switching an existing node to Custom JSON opens the
   outbound passwall would generate from its current form, ready to edit. Shunt rules,
   balancing and chain proxies use these nodes like any other.
+* **SOCKS-only mode**: set *Proxy Mode* to *SOCKS/HTTP proxy only* and the selected node
+  runs as a plain SOCKS5 proxy (plus an optional HTTP port) on the router. No traffic is
+  redirected: no firewall rules, DNS takeover or ACLs. Only apps and devices you point at
+  `socks5://<router>:1070` use it.
+* **Your own connection checks**: the status card's Baidu / Google / GitHub tiles can be
+  edited, reordered or replaced with any URLs (the *Check sites* tile).
 * **No Lua at runtime**: one multicall binary, `/usr/bin/passwall2`, fully static (musl). It
   handles the service, the firewall, DNS, subscriptions and the rpcd backend
   (`luci.passwall2` ubus object).
@@ -184,6 +190,12 @@ License: GPL-3.0-only, the same as upstream PassWall 2.
   چسباندن است و اولین outbound پروکسی استفاده می‌شود. اگر نود موجودی را روی Custom JSON
   بگذارید، outboundی که PassWall از فرم فعلی آن می‌سازد برای ویرایش باز می‌شود. قوانین تفکیک،
   توزیع بار و پروکسی زنجیره‌ای با این نودها هم مثل بقیه کار می‌کنند.
+* **حالت فقط SOCKS**: اگر «حالت پروکسی» را روی «فقط پروکسی SOCKS/HTTP» بگذارید، نود انتخاب‌شده
+  به‌صورت یک پروکسی SOCKS5 ساده (و در صورت نیاز یک پورت HTTP) روی روتر اجرا می‌شود و هیچ ترافیکی
+  هدایت نمی‌شود: نه قانون فایروال، نه تغییر DNS و نه ACL. فقط برنامه‌ها و دستگاه‌هایی که روی
+  `socks5://<router>:1070` تنظیم کنید از آن استفاده می‌کنند.
+* **سایت‌های بررسی اتصال دلخواه**: کاشی‌های Baidu، Google و GitHub در کارت وضعیت قابل ویرایش،
+  جابه‌جایی یا جایگزینی با هر آدرسی هستند (کاشی «سایت‌های بررسی»).
 * **بدون Lua در زمان اجرا**: یک باینری چندکاره، `/usr/bin/passwall2`، کاملاً ایستا (musl). این
   باینری سرویس، فایروال، DNS، اشتراک‌ها و بک‌اند rpcd (شیء ubus با نام `luci.passwall2`) را
   اداره می‌کند.

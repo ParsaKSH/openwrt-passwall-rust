@@ -133,6 +133,7 @@
 					"delete_select_nodes",
 					"reassign_group",
 					"save_node_list_opt",
+					"save_connect_sites",
 					"update_rules",
 					"rollback_rules",
 					"add_shunt_rule",

@@ -29,7 +29,8 @@ fn proc_cmdlines() -> Vec<String> {
 /// `index_status` predicate: a process from `TMP_PATH/bin/` whose cmdline has `/acl_default.json`.
 pub fn is_global_running(cmds: &[String]) -> bool {
     let bin = format!("{}/bin/", util::TMP_PATH);
-    cmds.iter().any(|c| !c.contains("grep") && c.contains(&bin) && c.contains("/acl_default.json"))
+    // `acl_default+http.json`: SOCKS-only mode with an HTTP port (core config renamed by run_socks)
+    cmds.iter().any(|c| !c.contains("grep") && c.contains(&bin) && (c.contains("/acl_default.json") || c.contains("/acl_default+http.json")))
 }
 
 /// `haproxy_status` predicate: `grep 'passwall2/bin/' | grep haproxy`.
@@ -223,6 +224,7 @@ mod tests {
         assert_eq!(socks_running(&cmds, "socks_b"), (true, true));
         assert_eq!(socks_running(&cmds, "socks_c"), (false, false));
         assert!(!is_global_running(&v(&["/usr/bin/xray run -c /tmp/acl_default.json"])));
+        assert!(is_global_running(&v(&["/tmp/etc/passwall2/bin/sing-box run -c /tmp/etc/passwall2/acl_default+http.json"])));
         // ACL processes are excluded from socks status
         assert_eq!(socks_running(&v(&["/tmp/etc/passwall2/bin/x acl_socks_a"]), "socks_a"), (false, false));
     }

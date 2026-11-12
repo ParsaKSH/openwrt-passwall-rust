@@ -2824,3 +2824,69 @@ msgstr "outbound با فرمت JSON خود %s که همان‌طور که نوش
 
 msgid "Could not convert this node to JSON; starting from an empty editor."
 msgstr "تبدیل این نود به JSON ممکن نشد؛ ویرایشگر خالی باز می‌شود."
+
+msgid "Check sites"
+msgstr "سایت‌های بررسی"
+
+msgid "Name"
+msgstr "نام"
+
+msgid "Invalid URL"
+msgstr "آدرس نامعتبر"
+
+msgid "Move up"
+msgstr "بالا"
+
+msgid "Move down"
+msgstr "پایین"
+
+msgid "Restore defaults"
+msgstr "بازگشت به پیش‌فرض"
+
+msgid "Connection check sites"
+msgstr "سایت‌های بررسی اتصال"
+
+msgid "At most 16 sites."
+msgstr "حداکثر ۱۶ سایت."
+
+msgid "Each tile on the status card requests its URL from the router and shows the response time. Prefer small pages such as generate_204 endpoints."
+msgstr "هر کاشی در کارت وضعیت، آدرس خودش را از روی روتر درخواست می‌کند و زمان پاسخ را نشان می‌دهد. بهتر است صفحه‌های کوچک مثل generate_204 را بگذارید."
+
+msgid "Proxy Mode"
+msgstr "حالت پروکسی"
+
+msgid "Transparent proxy (all LAN traffic)"
+msgstr "پروکسی شفاف (کل ترافیک شبکه)"
+
+msgid "SOCKS/HTTP proxy only (no redirection)"
+msgstr "فقط پروکسی SOCKS/HTTP (بدون هدایت ترافیک)"
+
+msgid "SOCKS/HTTP only: the node runs as an ordinary proxy server on the router. Nothing is redirected: no firewall rules, DNS takeover or access control. Only apps and devices configured to use the proxy go through it."
+msgstr "فقط SOCKS/HTTP: نود به‌صورت یک سرور پروکسی معمولی روی روتر اجرا می‌شود و هیچ ترافیکی هدایت نمی‌شود؛ نه قانون فایروال، نه تغییر DNS و نه کنترل دسترسی. فقط برنامه‌ها و دستگاه‌هایی که خودتان روی این پروکسی تنظیم کنید از آن عبور می‌کنند."
+
+msgid "SOCKS/HTTP only"
+msgstr "فقط SOCKS/HTTP"
+
+msgid "Listen on"
+msgstr "گوش دادن روی"
+
+msgid "All interfaces (LAN devices can connect)"
+msgstr "همه‌ی رابط‌ها (دستگاه‌های شبکه می‌توانند وصل شوند)"
+
+msgid "Router only (127.0.0.1)"
+msgstr "فقط خود روتر (127.0.0.1)"
+
+msgid "HTTP Listen Port"
+msgstr "پورت HTTP"
+
+msgid "Optional HTTP proxy on the same node. Leave empty to disable."
+msgstr "پروکسی HTTP اختیاری روی همین نود. برای غیرفعال کردن خالی بگذارید."
+
+msgid "Off"
+msgstr "خاموش"
+
+msgid "Proxy address"
+msgstr "آدرس پروکسی"
+
+msgid "Use socks5h (remote DNS) in clients where possible. Applied after Save & Apply."
+msgstr "در برنامه‌ها اگر ممکن است socks5h (DNS از طریق پروکسی) را انتخاب کنید. بعد از «ذخیره و اعمال» فعال می‌شود."

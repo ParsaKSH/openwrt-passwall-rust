@@ -533,6 +533,9 @@ pub struct Ctx {
     pub enabled_default_acl: bool,
     pub enabled_acls: bool,
     pub socks_enabled: bool,
+    /// `@global[0].proxy_mode == 'socks'` with the main switch on: the main node only serves a
+    /// SOCKS (and optional HTTP) proxy; no firewall redirection, DNS takeover or ACLs.
+    pub socks_mode: bool,
     pub tcp_proxy_way: String,
     pub proxy_ipv6: bool,
     /// `DIRECT_DNS_QUERY_STRATEGY` (empty unless `get_config` ran, like upstream CLI calls)
@@ -613,6 +616,11 @@ fn read_config_vars(c: &mut Ctx, cfg: &Config) {
     c.enabled_default_acl = c.enabled == "1" && !c.node.is_empty() && cfg.stype(&c.node).as_deref() == Some("nodes");
     c.enabled_acls = cfg.get_or("@global[0]", "acl_enable", "0") == "1";
     c.socks_enabled = cfg.get_or("@global[0]", "socks_enabled", "0") == "1";
+    c.socks_mode = c.enabled == "1" && cfg.get_or("@global[0]", "proxy_mode", "tproxy") == "socks";
+    if c.socks_mode {
+        c.enabled_default_acl = false;
+        c.enabled_acls = false;
+    }
     c.tcp_proxy_way = cfg.get_or("@global_forwarding[0]", "tcp_proxy_way", "redirect");
     c.proxy_ipv6 = cfg.get_or("@global_forwarding[0]", "ipv6_tproxy", "0") == "1";
     c.direct_dns_query_strategy = cfg.get_or("@global[0]", "direct_dns_query_strategy", "UseIP");
@@ -1416,6 +1424,37 @@ pub fn start_socks(ctx: &Ctx, cfg: &Config) {
     }
 }
 
+/// SOCKS-only mode: run the main node as a plain SOCKS5 (+ optional HTTP) proxy on
+/// `node_socks_port`, listening on `socks_mode_listen` (all interfaces by default). Uses the
+/// `acl_default` names so the status card, current-node display and node log work unchanged.
+pub fn start_socks_mode(ctx: &Ctx, cfg: &Config) {
+    if !ctx.socks_mode {
+        return;
+    }
+    let node = cfg.s("@global[0]", "node");
+    if node.is_empty() || cfg.stype(&node).as_deref() != Some("nodes") {
+        logi(0, "SOCKS-only mode: no node selected, nothing to start.", &[]);
+        return;
+    }
+    let listen = cfg.get_or("@global[0]", "socks_mode_listen", "0.0.0.0");
+    let bind = if listen == "127.0.0.1" { "127.0.0.1" } else { "0.0.0.0" };
+    let port = cfg.get_or("@global[0]", "node_socks_port", "1070");
+    let http_port = cfg.get("@global[0]", "socks_mode_http_port").filter(|p| p.parse::<u16>().is_ok_and(|n| n > 0)).unwrap_or_else(|| "0".into());
+    logi(0, "SOCKS-only mode: [%s] SOCKS5 %s:%s (no transparent proxy).", &[&cfg.section(&node).map(api::get_node_remarks).unwrap_or_default(), bind, &port]);
+    let mut r = Args::new();
+    put(&mut r, "flag", "acl_default");
+    put(&mut r, "node", &node);
+    put(&mut r, "bind", bind);
+    put(&mut r, "socks_port", &port);
+    put(&mut r, "config_file", "acl_default.json");
+    put(&mut r, "http_port", &http_port);
+    put(&mut r, "http_config_file", "acl_default_http.json");
+    put(&mut r, "log_file", "acl/acl_default.log");
+    run_socks(ctx, cfg, &r);
+    util::set_cache_var("ACL_acl_default_node", &node);
+    util::set_cache_var("ACL_acl_default_node_socks_port", &port);
+}
+
 // ====================================================================== cron
 
 /// cron time spec `"<mm> <hh> * * <week|*>"` from week mode and `H:MM`/`HH:MM`.
@@ -1878,9 +1917,14 @@ pub fn app_start(action: &str) -> i32 {
     set_rlimit_nofile(65535);
     start_haproxy(&ctx, &cfg);
     start_socks(&ctx, &cfg);
+    start_socks_mode(&ctx, &cfg);
     let (use_tables, nftflag) = check_run_environment(&cfg, false);
     ctx.use_tables = use_tables;
     ctx.nftflag = nftflag;
+    if ctx.socks_mode {
+        // SOCKS-only: no firewall rules, DNS takeover or ACL cores at all
+        ctx.use_tables.clear();
+    }
     if !ctx.use_tables.is_empty() {
         let st = acl::run();
         ctx.acl_node_order = st.node_order.clone();

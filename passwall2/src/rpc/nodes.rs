@@ -318,6 +318,64 @@ pub fn save_node_list_opt(p: &Params) -> Value {
     json!({"status": "ok"})
 }
 
+// ---------------------------------------------------------------- save_connect_sites
+
+/// Most entries the status card shows.
+const MAX_CONNECT_SITES: usize = 16;
+
+/// Validate the status card's connection-check targets: `[{name, url}]` (or its JSON text) →
+/// UCI list values `name|url`. An empty list means "built-in defaults".
+pub fn connect_site_values(v: &Value) -> Result<Vec<String>, String> {
+    let parsed;
+    let v = match v {
+        Value::String(s) => {
+            parsed = serde_json::from_str::<Value>(s).map_err(|_| "invalid sites".to_string())?;
+            &parsed
+        }
+        o => o,
+    };
+    let Value::Array(a) = v else { return Err("sites must be a list".into()) };
+    if a.len() > MAX_CONNECT_SITES {
+        return Err(format!("at most {} sites", MAX_CONNECT_SITES));
+    }
+    let mut out = vec![];
+    for e in a {
+        let name = e.get("name").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+        let url = e.get("url").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+        if name.is_empty() || name.chars().count() > 40 || name.contains('|') || name.chars().any(|c| c.is_control()) {
+            return Err(format!("invalid name: {}", name));
+        }
+        let scheme_ok = url.starts_with("http://") || url.starts_with("https://");
+        if !scheme_ok || url.len() > 512 || url.chars().any(|c| c.is_whitespace() || c.is_control()) || api::parse_url(&url).is_none() {
+            return Err(format!("invalid URL: {}", url));
+        }
+        out.push(format!("{}|{}", name, url));
+    }
+    Ok(out)
+}
+
+/// `save_connect_sites {sites}`: store the connection-check targets (`@global_other[0]`
+/// list `connect_site`); an empty list restores the built-in Baidu / Google / GitHub tiles.
+/// Only a UI preference: committed without restarting the service.
+pub fn save_connect_sites(p: &Params) -> Value {
+    let vals = match p.raw("sites").map(connect_site_values) {
+        Some(Ok(v)) => v,
+        Some(Err(e)) => return json!({"code": 0, "msg": e}),
+        None => return json!({"code": 0, "msg": "missing sites"}),
+    };
+    let mut st = Store::load(C);
+    if !st.exists("@global_other[0]") {
+        return json!({"code": 0, "msg": "no global_other section"});
+    }
+    if vals.is_empty() {
+        st.del("@global_other[0]", "connect_site");
+    } else {
+        st.set_list("@global_other[0]", "connect_site", &vals);
+    }
+    st.save(false);
+    json!({"code": 1})
+}
+
 // ---------------------------------------------------------------- get_node / get_shunt_rules
 
 /// `get_node` / `get_shunt_rules` listing: one section (no `.index`), or all sections of
@@ -798,4 +856,21 @@ fn node_section(m: &Map<String, Value>) -> crate::uci::Section {
     }
     let name = m.get(".name").and_then(|v| v.as_str()).filter(|s| is_sid(s)).unwrap_or("node").to_string();
     crate::uci::Section { name, stype: "nodes".into(), anonymous: false, index: 0, options }
+}
+
+#[cfg(test)]
+mod connect_site_tests {
+    use super::*;
+    #[test]
+    fn connect_sites_validation() {
+        let ok = connect_site_values(&json!([{"name": "Cloudflare", "url": "https://cp.cloudflare.com/generate_204"}, {"name": " IR ", "url": "http://example.ir/"}])).unwrap();
+        assert_eq!(ok, vec!["Cloudflare|https://cp.cloudflare.com/generate_204", "IR|http://example.ir/"]);
+        assert_eq!(connect_site_values(&json!("[]")).unwrap(), Vec::<String>::new());
+        assert!(connect_site_values(&json!([{"name": "a|b", "url": "https://x.com"}])).is_err());
+        assert!(connect_site_values(&json!([{"name": "", "url": "https://x.com"}])).is_err());
+        assert!(connect_site_values(&json!([{"name": "x", "url": "ftp://x.com"}])).is_err());
+        assert!(connect_site_values(&json!([{"name": "x", "url": "-o /tmp/x"}])).is_err());
+        assert!(connect_site_values(&json!([{"name": "x", "url": "https://x.com/a b"}])).is_err());
+        assert!(connect_site_values(&json!({"name": "x"})).is_err());
+    }
 }

@@ -103,6 +103,7 @@ pub static METHODS: &[Method] = &[
     m!("get_node", "id" => S),
     m!("gen_node_json", "node" => S),
     m!("save_node_list_opt", "option" => S, "value" => S),
+    m!("save_connect_sites", "sites" => S),
     // ---- rules
     m!("update_rules", "update" => S),
     m!("rollback_rules", "type" => S),
@@ -165,6 +166,7 @@ pub static WRITE_METHODS: &[&str] = &[
     "delete_select_nodes",
     "reassign_group",
     "save_node_list_opt",
+    "save_connect_sites",
     "update_rules",
     "rollback_rules",
     "add_shunt_rule",
@@ -307,6 +309,7 @@ pub fn call_sync(method: &str, p: &Params) -> Option<Value> {
         "get_node" => nodes::get_node(p),
         "gen_node_json" => nodes::gen_node_json(p),
         "save_node_list_opt" => nodes::save_node_list_opt(p),
+        "save_connect_sites" => nodes::save_connect_sites(p),
         "update_rules" => system::update_rules(p),
         "rollback_rules" => system::rollback_rules(p),
         "get_shunt_rules" => nodes::get_shunt_rules(p),

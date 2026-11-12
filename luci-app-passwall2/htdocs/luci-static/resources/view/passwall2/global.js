@@ -41,6 +41,107 @@ const ContentValue = form.DummyValue.extend({
 	remove() {}
 });
 
+/* Connection-check targets: `name|url` entries of @global_other[0].connect_site, or the
+ * built-in Baidu / Google / GitHub tiles when the list is not set. */
+const DEFAULT_SITES = [
+	{ name: _('Baidu Connection'), url: 'https://www.baidu.com' },
+	{ name: _('Google Connection'), url: 'https://www.google.com/generate_204' },
+	{ name: _('GitHub Connection'), url: 'https://github.com' }
+];
+
+/* list saved from the editor during this page view (UCI cache is left untouched so the
+ * form's unsaved changes are not disturbed) */
+let savedSites = null;
+
+function loadConnectSites() {
+	if (savedSites)
+		return savedSites.length ? savedSites.slice() : DEFAULT_SITES.slice();
+	const other = uci.sections(CONF, 'global_other')[0] || {};
+	let list = other.connect_site;
+	if (list == null || list === '')
+		return DEFAULT_SITES.slice();
+	if (!Array.isArray(list))
+		list = [ list ];
+	const out = [];
+	list.forEach((v) => {
+		const i = String(v).indexOf('|');
+		if (i > 0)
+			out.push({ name: String(v).slice(0, i), url: String(v).slice(i + 1) });
+	});
+	return out.length ? out : DEFAULT_SITES.slice();
+}
+
+function validSiteUrl(u) {
+	return /^https?:\/\/[^\s/?#]+[^\s]*$/i.test(u) && u.length <= 512;
+}
+
+/* Modal editor for the check sites; resolves true once saved. Saved directly (no service
+ * restart: it is only a dashboard preference). */
+function editConnectSites() {
+	return new Promise((resolve) => {
+		const rows = E('div');
+		const errEl = E('div', { 'class': 'pw-text-err', 'style': 'min-height:1.2em' });
+		const addRow = (site) => {
+			const name = E('input', { 'type': 'text', 'class': 'cbi-input-text', 'maxlength': 40, 'placeholder': _('Name'), 'value': site ? site.name : '' });
+			const url = E('input', { 'type': 'url', 'class': 'cbi-input-text pw-sites-url', 'maxlength': 512, 'placeholder': 'https://example.com/generate_204', 'value': site ? site.url : '' });
+			const row = E('div', { 'class': 'pw-sites-row' }, [ name, url ]);
+			const mv = (d) => {
+				const sib = d < 0 ? row.previousElementSibling : row.nextElementSibling;
+				if (sib) rows.insertBefore(row, d < 0 ? sib : sib.nextElementSibling);
+			};
+			row.appendChild(E('button', { 'class': 'btn cbi-button', 'type': 'button', 'title': _('Move up'), 'click': () => mv(-1) }, [ '↑' ]));
+			row.appendChild(E('button', { 'class': 'btn cbi-button', 'type': 'button', 'title': _('Move down'), 'click': () => mv(1) }, [ '↓' ]));
+			row.appendChild(E('button', { 'class': 'btn cbi-button cbi-button-remove', 'type': 'button', 'title': _('Delete'), 'click': () => row.remove() }, [ '✕' ]));
+			rows.appendChild(row);
+			return name;
+		};
+		loadConnectSites().forEach(addRow);
+
+		const collect = () => {
+			const out = [];
+			for (const row of rows.children) {
+				const inputs = row.querySelectorAll('input');
+				const name = inputs[0].value.trim(), url = inputs[1].value.trim();
+				if (!name && !url) continue;
+				if (!name || name.indexOf('|') >= 0)
+					return _('Name') + ': ' + (name || '?');
+				if (!validSiteUrl(url))
+					return _('Invalid URL') + ': ' + (url || '?');
+				out.push({ name: name, url: url });
+			}
+			return out.length > 16 ? _('At most 16 sites.') : out;
+		};
+		const save = (list) => pw.call('save_connect_sites', { sites: JSON.stringify(list) }).then((r) => {
+			if (!r || r.code !== 1) {
+				errEl.textContent = (r && r.msg) || _('Error');
+				return;
+			}
+			savedSites = list;
+			ui.hideModal();
+			resolve(true);
+		}).catch((e) => { errEl.textContent = _('Error') + ': ' + (e && e.message || e); });
+
+		ui.showModal(_('Connection check sites'), [
+			E('div', { 'class': 'pw-root pw-modal' }, [
+				E('p', {}, [ _('Each tile on the status card requests its URL from the router and shows the response time. Prefer small pages such as generate_204 endpoints.') ]),
+				rows,
+				E('button', { 'class': 'btn cbi-button-add', 'type': 'button', 'click': () => addRow(null).focus() }, [ _('Add') ]),
+				errEl
+			]),
+			E('div', { 'class': 'right' }, [
+				E('button', { 'class': 'btn cbi-button', 'click': () => { ui.hideModal(); resolve(false); } }, [ _('Cancel') ]), ' ',
+				E('button', { 'class': 'btn cbi-button-reset', 'click': () => { errEl.textContent = ''; save([]); } }, [ _('Restore defaults') ]), ' ',
+				E('button', { 'class': 'btn cbi-button-action important', 'click': () => {
+					errEl.textContent = '';
+					const list = collect();
+					if (typeof list === 'string') { errEl.textContent = list; return; }
+					save(list);
+				} }, [ _('Save') ])
+			])
+		]);
+	});
+}
+
 return view.extend({
 	load() {
 		return Promise.all([
@@ -110,25 +211,34 @@ return view.extend({
 			});
 		};
 
-		const sites = [
-			[ 'baidu', _('Baidu Connection'), 'https://www.baidu.com' ],
-			[ 'google', _('Google Connection'), 'https://www.google.com/generate_204' ],
-			[ 'github', _('GitHub Connection'), 'https://github.com' ]
-		];
-
-		const grid = E('div', { 'class': 'pw-status-grid' }, [
-			mkTile('core', 'cpu', _('Core'), _('NOT RUNNING'), 'err', false)
-		].concat(sites.map((s) => {
-			const el = mkTile(s[0], s[0] === 'github' ? 'link' : 'globe', s[1], _('Touch Check'), 'err', true);
-			el.addEventListener('click', () => checkConnect(s[0], s[2]));
+		const grid = E('div', { 'class': 'pw-status-grid' });
+		const coreTile = mkTile('core', 'cpu', _('Core'), _('NOT RUNNING'), 'err', false);
+		const onActivate = (el, fn) => {
+			el.addEventListener('click', fn);
 			el.addEventListener('keydown', (ev) => {
 				if (ev.key === 'Enter' || ev.key === ' ') {
 					ev.preventDefault();
-					checkConnect(s[0], s[2]);
+					fn();
 				}
 			});
-			return el;
-		})));
+		};
+		/* connection-check tiles: the user's list (global_other.connect_site) or the defaults */
+		const renderSites = () => {
+			const tiles2 = [ coreTile ];
+			loadConnectSites().forEach((site, i) => {
+				const id = 'site' + i;
+				const el = mkTile(id, /github/i.test(site.url) ? 'link' : 'globe', site.name, _('Touch Check'), 'err', true);
+				el.title = site.url;
+				onActivate(el, () => checkConnect(id, site.url));
+				tiles2.push(el);
+			});
+			const edit = mkTile('edit_sites', 'settings', _('Check sites'), _('Edit'), 'muted', true);
+			edit.classList.add('pw-tile-edit');
+			onActivate(edit, () => editConnectSites().then((changed) => { if (changed) renderSites(); }));
+			tiles2.push(edit);
+			dom.content(grid, tiles2);
+		};
+		renderSites();
 
 		/* configuration summary (node, DNS, ports) */
 		const gsid = this.gsid;
@@ -157,6 +267,7 @@ return view.extend({
 			info('ping', _('Current Node'), this.usingEl),
 			info('dns', _('Remote DNS'), proto.toUpperCase() + ' ' + remote),
 			info('dns', _('Direct DNS'), direct),
+			info('shield', _('Proxy Mode'), uci.get(CONF, gsid, 'proxy_mode') === 'socks' ? _('SOCKS/HTTP only') : _('Transparent proxy')),
 			nodeId ? info('plug', _('Node') + ' Socks ' + _('Listen Port'), uci.get(CONF, gsid, 'node_socks_port') || '1070') : '',
 			info('list', _('Socks Config'), '%d / %d'.format(socksOn, socksTotal))
 		]);
@@ -434,6 +545,13 @@ return view.extend({
 		const isSingbox = s.taboption('Main', pw.HideValue, '_is_singbox');
 		isSingbox.depends('_hide', '1');
 
+		/* ---- Proxy mode: transparent proxy (upstream behaviour) or a plain SOCKS/HTTP proxy */
+		o = s.taboption('Main', form.ListValue, 'proxy_mode', _('Proxy Mode'),
+			_('SOCKS/HTTP only: the node runs as an ordinary proxy server on the router. Nothing is redirected: no firewall rules, DNS takeover or access control. Only apps and devices configured to use the proxy go through it.'));
+		o.value('tproxy', _('Transparent proxy (all LAN traffic)'));
+		o.value('socks', _('SOCKS/HTTP proxy only (no redirection)'));
+		o.default = 'tproxy';
+
 		/* ---- Shunt (include/shunt_options.lua for every shunt node; visible while selected) */
 		if (hasCore && nodes.length > 0) {
 			if (normalList.length > 0 || ifaceList.length > 0) {
@@ -464,10 +582,12 @@ return view.extend({
 			o = s.taboption('Main', form.Flag, 'localhost_proxy', _('Localhost Proxy'), _('When selected, localhost can transparent proxy.'));
 			o.default = '1';
 			o.rmempty = false;
+			o.depends('proxy_mode', 'tproxy');
 
 			o = s.taboption('Main', form.Flag, 'client_proxy', _('Client Proxy'), _('When selected, devices in LAN can transparent proxy. Otherwise, it will not be proxy. But you can still use access control to allow the designated device to proxy.'));
 			o.default = '1';
 			o.rmempty = false;
+			o.depends('proxy_mode', 'tproxy');
 		}
 		else {
 			const missing = '<div class="cbi-checkbox"><input class="cbi-input-checkbox" type="checkbox" disabled></div><div class="cbi-value-description"><font color="red">%s</font></div>'
@@ -475,10 +595,12 @@ return view.extend({
 			o = s.taboption('Main', form.DummyValue, 'localhost_proxy', _('Localhost Proxy'));
 			o.rawhtml = true;
 			o.cfgvalue = function() { return missing; };
+			o.depends('proxy_mode', 'tproxy');
 
 			o = s.taboption('Main', form.DummyValue, 'client_proxy', _('Client Proxy'));
 			o.rawhtml = true;
 			o.cfgvalue = function() { return missing; };
+			o.depends('proxy_mode', 'tproxy');
 		}
 
 		o = s.taboption('Main', form.Value, 'node_socks_port', _('Node') + ' Socks ' + _('Listen Port'));
@@ -488,7 +610,32 @@ return view.extend({
 
 		o = s.taboption('Main', form.Flag, 'node_socks_bind_local', _('Node') + ' Socks ' + _('Bind Local'), _('When selected, it can only be accessed localhost.'));
 		o.default = '1';
-		o.depends('_node', '1');
+		o.depends({ _node: '1', proxy_mode: 'tproxy' });
+
+		o = s.taboption('Main', form.ListValue, 'socks_mode_listen', _('Listen on'));
+		o.value('0.0.0.0', _('All interfaces (LAN devices can connect)'));
+		o.value('127.0.0.1', _('Router only (127.0.0.1)'));
+		o.default = '0.0.0.0';
+		o.depends({ _node: '1', proxy_mode: 'socks' });
+
+		o = s.taboption('Main', form.Value, 'socks_mode_http_port', _('HTTP Listen Port'), _('Optional HTTP proxy on the same node. Leave empty to disable.'));
+		o.datatype = 'port';
+		o.placeholder = _('Off');
+		o.depends({ _node: '1', proxy_mode: 'socks' });
+
+		o = s.taboption('Main', form.DummyValue, '_socks_usage', _('Proxy address'));
+		o.rawhtml = true;
+		o.cfgvalue = function(section_id) {
+			const host = window.location.hostname || '192.168.1.1';
+			const local = (uci.get(CONF, section_id, 'socks_mode_listen') || '0.0.0.0') === '127.0.0.1';
+			const h = local ? '127.0.0.1' : host;
+			const port = uci.get(CONF, section_id, 'node_socks_port') || '1070';
+			const http = uci.get(CONF, section_id, 'socks_mode_http_port');
+			let out = '<code>socks5://%s:%s</code>'.format(h, port);
+			if (http) out += ' &nbsp; <code>http://%s:%s</code>'.format(h, http);
+			return out + '<div class="cbi-value-description">' + _('Use socks5h (remote DNS) in clients where possible. Applied after Save & Apply.') + '</div>';
+		};
+		o.depends({ _node: '1', proxy_mode: 'socks' });
 
 		/* ---- DNS */
 		s.tab('DNS', _('DNS'));

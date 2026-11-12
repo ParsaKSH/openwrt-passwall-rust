@@ -85,6 +85,13 @@ it privately in your module (don't edit others' files).
   `sockopt.mark 255` when unset. Invalid JSON is logged and becomes a blackhole/block outbound.
   `gen_node_json {node}` (rpc) renders a regular node's unsaved form values as outbound JSON
   for the editor's form → JSON switch.
+* SOCKS-only mode (`@global[0].proxy_mode 'socks'`, default `tproxy`): `read_config_vars` clears
+  `enabled_default_acl`/`enabled_acls` and `app_start` skips the firewall; `start_socks_mode` runs
+  the main node through `run_socks` with flag/config `acl_default` on `node_socks_port`
+  (`socks_mode_listen`, optional `socks_mode_http_port`), so status, current node and node log
+  work unchanged.
+* Status-card check targets: `@global_other[0]` list `connect_site` (`name|url`), written by the
+  `save_connect_sites` rpc; unset = built-in Baidu/Google/GitHub.
 
 ## rpcd contract (`luci.passwall2` ubus object) — backend `rpc.rs` ⇄ frontend JS
 * `passwall2 rpc list` prints `{ "<method>": { "<param>": "<example type>" , ...}, ... }`.

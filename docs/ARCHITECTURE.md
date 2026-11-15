@@ -90,6 +90,13 @@ it privately in your module (don't edit others' files).
   the main node through `run_socks` with flag/config `acl_default` on `node_socks_port`
   (`socks_mode_listen`, optional `socks_mode_http_port`), so status, current node and node log
   work unchanged.
+* HeshmatWall (`heshmat.rs`, app in `luci-app-passwall2/htdocs/heshmatwall/`): uhttpd CGI
+  `/www/cgi-bin/heshmatwall` → `passwall2 heshmatwall cgi`, POST JSON `{action, token, ...}`.
+  Own auth: `passwall2.heshmatwall` (`username`, PBKDF2-SHA256 `password_hash`, `link_key`
+  required at login, `session_hours`); sessions = SHA-256 of random tokens in
+  `/tmp/heshmatwall/s/`, bound to hash+link key; 5 failed logins per address → 10 min lock.
+  Settings writable from the app are a whitelist validated server-side. LuCI side: rpc
+  `heshmatwall_info` / `_set_password` / `_regen_link` / `_logout_all`.
 * Status-card check targets: `@global_other[0]` list `connect_site` (`name|url`), written by the
   `save_connect_sites` rpc; unset = built-in Baidu/Google/GitHub.
 

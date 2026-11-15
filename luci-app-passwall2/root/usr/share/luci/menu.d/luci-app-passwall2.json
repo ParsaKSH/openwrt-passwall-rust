@@ -126,6 +126,15 @@
 		}
 	},
 
+	"admin/services/passwall2/heshmatwall": {
+		"title": "HeshmatWall",
+		"order": 100,
+		"action": {
+			"type": "view",
+			"path": "passwall2/heshmatwall"
+		}
+	},
+
 	"admin/services/passwall2/log": {
 		"title": "Runtime Logs",
 		"order": 999,

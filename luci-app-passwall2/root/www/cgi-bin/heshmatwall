@@ -1,0 +1,3 @@
+#!/bin/sh
+# HeshmatWall web app API (see passwall2/src/heshmat.rs); own login, separate from LuCI.
+exec /usr/bin/passwall2 heshmatwall cgi

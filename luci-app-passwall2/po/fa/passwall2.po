@@ -2890,3 +2890,87 @@ msgstr "آدرس پروکسی"
 
 msgid "Use socks5h (remote DNS) in clients where possible. Applied after Save & Apply."
 msgstr "در برنامه‌ها اگر ممکن است socks5h (DNS از طریق پروکسی) را انتخاب کنید. بعد از «ذخیره و اعمال» فعال می‌شود."
+
+msgid "Confirm Password"
+msgstr "تکرار رمز عبور"
+
+msgid "Set"
+msgstr "تنظیم شده"
+
+msgid "Not set"
+msgstr "تنظیم نشده"
+
+msgid "Open"
+msgstr "باز کردن"
+
+msgid "Copied"
+msgstr "کپی شد"
+
+msgid "Copy failed"
+msgstr "کپی ناموفق بود"
+
+msgid "Access"
+msgstr "دسترسی"
+
+msgid "Set HeshmatWall password"
+msgstr "تنظیم رمز عبور HeshmatWall"
+
+msgid "At least 8 characters. Changing the password signs out every device."
+msgstr "حداقل ۸ کاراکتر. با تغییر رمز عبور همه‌ی دستگاه‌ها از حساب خارج می‌شوند."
+
+msgid "The passwords do not match."
+msgstr "رمزهای عبور یکسان نیستند."
+
+msgid "At least 8 characters."
+msgstr "حداقل ۸ کاراکتر."
+
+msgid "Signed-in devices"
+msgstr "دستگاه‌های واردشده"
+
+msgid "Change password"
+msgstr "تغییر رمز عبور"
+
+msgid "Set password"
+msgstr "تنظیم رمز عبور"
+
+msgid "New link"
+msgstr "لینک جدید"
+
+msgid "The current link stops working and every device is signed out. Continue?"
+msgstr "لینک فعلی از کار می‌افتد و همه‌ی دستگاه‌ها از حساب خارج می‌شوند. ادامه می‌دهید؟"
+
+msgid "Sign out all devices"
+msgstr "خروج همه‌ی دستگاه‌ها"
+
+msgid "Set a password first; the link is created with it."
+msgstr "اول رمز عبور بگذارید؛ لینک همراه با آن ساخته می‌شود."
+
+msgid "App link"
+msgstr "لینک برنامه"
+
+msgid "The app is disabled: enable it below and Save & Apply."
+msgstr "برنامه غیرفعال است: پایین صفحه فعالش کنید و «ذخیره و اعمال» را بزنید."
+
+msgid "Open the link on your phone (same network as the router), sign in with the username and password, then use \"Add to Home screen\" / \"Install app\". The link contains a secret key: share it only with people who should manage the router."
+msgstr "لینک را روی گوشی (در همان شبکه‌ی روتر) باز کنید، با نام کاربری و رمز عبور وارد شوید و بعد «Add to Home screen» یا «Install app» را بزنید. این لینک یک کلید مخفی دارد؛ فقط به کسانی بدهید که باید روتر را مدیریت کنند."
+
+msgid "Serve the HeshmatWall app at /heshmatwall/ on this router."
+msgstr "برنامه‌ی HeshmatWall را روی آدرس /heshmatwall/ همین روتر ارائه کن."
+
+msgid "Stay signed in for"
+msgstr "مدت باقی ماندن در حساب"
+
+msgid "1 hour"
+msgstr "۱ ساعت"
+
+msgid "1 day"
+msgstr "۱ روز"
+
+msgid "7 days"
+msgstr "۷ روز"
+
+msgid "30 days"
+msgstr "۳۰ روز"
+
+msgid "A phone app for PassWall 2 with its own sign-in, separate from LuCI."
+msgstr "برنامه‌ی موبایل برای PassWall 2 با ورود جداگانه از LuCI."

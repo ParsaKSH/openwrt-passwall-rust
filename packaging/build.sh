@@ -171,7 +171,7 @@ set_modes() {
 	find "$r" -type d -exec chmod 0755 {} +
 	find "$r" -type f -exec chmod 0644 {} +
 	local p
-	for p in usr/bin usr/sbin etc/init.d etc/uci-defaults etc/hotplug.d usr/libexec/rpcd; do
+	for p in usr/bin usr/sbin etc/init.d etc/uci-defaults etc/hotplug.d usr/libexec/rpcd www/cgi-bin; do
 		[ -d "$r/$p" ] && find "$r/$p" -type f -exec chmod 0755 {} +
 	done
 	find "$r" -type f -name '*.sh' -exec chmod 0755 {} +

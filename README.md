@@ -33,6 +33,12 @@ JavaScript views.
   `socks5://<router>:1070` use it.
 * **Your own connection checks**: the status card's Baidu / Google / GitHub tiles can be
   edited, reordered or replaced with any URLs (the *Check sites* tile).
+* **HeshmatWall phone app**: a v2rayNG-style web app (installable PWA) at
+  `http://<router>/heshmatwall/` with its own sign-in, separate from LuCI. Turn it on and set
+  a password under *Services → PassWall 2 → HeshmatWall*; that page gives you the link (and
+  a QR code). From the phone you can start/stop, pick a config, import share links, test
+  delays, manage subscriptions, change the proxy mode/ports/DNS and read the log. English and
+  Persian, light and dark.
 * **No Lua at runtime**: one multicall binary, `/usr/bin/passwall2`, fully static (musl). It
   handles the service, the firewall, DNS, subscriptions and the rpcd backend
   (`luci.passwall2` ubus object).
@@ -196,6 +202,11 @@ License: GPL-3.0-only, the same as upstream PassWall 2.
   `socks5://<router>:1070` تنظیم کنید از آن استفاده می‌کنند.
 * **سایت‌های بررسی اتصال دلخواه**: کاشی‌های Baidu، Google و GitHub در کارت وضعیت قابل ویرایش،
   جابه‌جایی یا جایگزینی با هر آدرسی هستند (کاشی «سایت‌های بررسی»).
+* **برنامه‌ی موبایل HeshmatWall**: یک وب‌اپ شبیه v2rayNG (قابل نصب به‌صورت PWA) روی
+  `http://<router>/heshmatwall/` با ورود جداگانه از LuCI. در *Services ← PassWall 2 ← HeshmatWall*
+  فعالش کنید و رمز بگذارید؛ همان صفحه لینک (و QR) را می‌دهد. از گوشی می‌شود سرویس را روشن و
+  خاموش کرد، کانفیگ انتخاب کرد، لینک وارد کرد، تأخیر را تست کرد، اشتراک‌ها را مدیریت کرد، حالت
+  پروکسی و پورت‌ها و DNS را تغییر داد و لاگ را دید. فارسی و انگلیسی، روشن و تیره.
 * **بدون Lua در زمان اجرا**: یک باینری چندکاره، `/usr/bin/passwall2`، کاملاً ایستا (musl). این
   باینری سرویس، فایروال، DNS، اشتراک‌ها و بک‌اند rpcd (شیء ubus با نام `luci.passwall2`) را
   اداره می‌کند.

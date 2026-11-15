@@ -17,6 +17,7 @@ pub mod subscribe;
 pub mod rules;
 pub mod rpc;
 pub mod migrate;
+pub mod heshmat;
 
 const HELP: &str = "passwall2 (Rust) — commands:
   start | stop | restart | boot          service control (used by /etc/init.d/passwall2)
@@ -33,6 +34,7 @@ const HELP: &str = "passwall2 (Rust) — commands:
   monitor | tasks | lease2hosts          daemons
   rpc <list|call> [method]               rpcd exec plugin (luci.passwall2)
   migrate [--dry-run]                    bring a legacy (26.4-era) config to the current schema
+  heshmatwall cgi|logout-all             HeshmatWall web app API (uhttpd CGI)
   version";
 
 fn main() {
@@ -53,6 +55,7 @@ fn main() {
         "rpc" => rpc::cli(&rest),
         "api" => api::cli(&rest),
         "migrate" => migrate::cli(&rest),
+        "heshmatwall" => heshmat::cli(&rest),
         "version" | "-v" | "--version" => {
             println!("{}", env!("CARGO_PKG_VERSION"));
             0

@@ -226,3 +226,8 @@ config shunt_rules 'Russia'
 #rule-set:remote:https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat/refs/heads/release/sing-box/rule-set-geoip/geoip-ru.srs'
 	option group 'RU'
 
+
+config heshmatwall 'heshmatwall'
+	option enabled '0'
+	option username 'admin'
+	option session_hours '168'

@@ -32,6 +32,17 @@ uci commit firewall
 
 [ ! -s "/etc/config/passwall2" ] && cp -f /usr/share/passwall2/0_default_config /etc/config/passwall2
 
+# HeshmatWall web app settings (not upstream); off until a password is set in LuCI
+if ! uci -q get passwall2.heshmatwall >/dev/null; then
+	uci -q batch <<-EOF
+		set passwall2.heshmatwall=heshmatwall
+		set passwall2.heshmatwall.enabled='0'
+		set passwall2.heshmatwall.username='admin'
+		set passwall2.heshmatwall.session_hours='168'
+		commit passwall2
+EOF
+fi
+
 # Not upstream: an existing config from an older luci-app-passwall2 (26.4.x and earlier) uses
 # option names / values the current schema renamed (Shadowsocks cipher in 'method', ports
 # 'disable', ...). Copy them to their new names (the legacy options are kept, so a rollback to
